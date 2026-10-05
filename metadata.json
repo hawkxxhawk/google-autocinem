@@ -1,0 +1,8 @@
+{
+  "name": "Remix: AutoCinema",
+  "description": "Smart Cinema Directory \u0026 Organizer with folder management, movie catalogs, and randomized startup selection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

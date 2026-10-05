@@ -1,0 +1,191 @@
+{
+  "isDeltaUpdate": true,
+  "chunkIndex": 2,
+  "totalChunks": 2,
+  "notice": "ملف التحديثات والإضافات الجديدة (initialData2.json) - هذا هو الملف الوحيد المطلوب نسخه عند عمل إضافات أو تعديلات على الوضع الحالي",
+  "baseExportedAt": "2026-10-04T12:44:19.004Z",
+  "exportedAt": "2026-10-04T12:48:53.173Z",
+  "baseItemsCount": 22815,
+  "newItemsCount": 0,
+  "modifiedItemsCount": 0,
+  "deletedItemsCount": 0,
+  "totalUpdatesCount": 0,
+  "folders": [
+    {
+      "id": "folder-1787864128798",
+      "name": "كيو فيلم عربى",
+      "description": "Collection imported on 8/27/2026",
+      "color": "#f14b04",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": false
+    },
+    {
+      "id": "folder-1784981422708",
+      "name": "مستودع Egybest",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1784982760439",
+      "name": "aflam18.asian",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1784982837960",
+      "name": "aflam18.اجنبى",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1784982935261",
+      "name": "aflamicose.xyz",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1787863707394",
+      "name": "aflamicos.com",
+      "description": "Collection imported on 8/27/2026",
+      "color": "#f14b04",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1784983052117",
+      "name": "cimaab",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1784983204732",
+      "name": "tuktukhd",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1784983344158",
+      "name": "shahidpro",
+      "description": "Collection imported on 7/25/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "enableProxy": false,
+      "proxyProvider": "google_translate",
+      "customProxyUrl": "",
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1785095845176",
+      "name": "XX-fav",
+      "description": "",
+      "color": "#D81B60",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": false
+    },
+    {
+      "id": "folder-1788037993294",
+      "name": "افلام الزعيم",
+      "description": "Collection imported on 8/30/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "enableProxy": false,
+      "proxyProvider": "hideme",
+      "customProxyUrl": "",
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1788086588625",
+      "name": "viola-hd",
+      "description": "Collection imported on 8/30/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1790356192202",
+      "name": "w30.shahidwbas",
+      "description": "Collection imported on 9/25/2026",
+      "color": "#e7f613",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1790356761444",
+      "name": "مسلسلات",
+      "description": "",
+      "color": "#43A047",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "repo-vault-private",
+      "name": "افلام ومسلسلات عربيه",
+      "description": "",
+      "color": "#475569",
+      "sortBy": "date",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1785270483733",
+      "name": "List 1 fav",
+      "description": "Collection imported on 7/28/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "includeInAllFavorites": true
+    },
+    {
+      "id": "folder-1785270526987",
+      "name": "List 2 fav",
+      "description": "Collection imported on 7/28/2026",
+      "color": "#8E24AA",
+      "sortBy": "title",
+      "isFolderHidden": false,
+      "enableProxy": false,
+      "proxyProvider": "croxyproxy",
+      "customProxyUrl": "",
+      "includeInAllFavorites": true
+    }
+  ],
+  "movies": [],
+  "newMovies": [],
+  "modifiedMovies": [],
+  "deletedMovieIds": [],
+  "favoriteLists": [
+    {
+      "id": "fav-list-default",
+      "name": "المفضلة الرئيسية",
+      "description": "القائمة الافتراضية لأفضل الأفلام والعروض",
+      "color": "#f59e0b",
+      "createdAt": "2026-07-26T17:56:08.027Z",
+      "movieIds": []
+    }
+  ]
+}
