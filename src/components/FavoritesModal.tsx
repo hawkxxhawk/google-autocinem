@@ -21,6 +21,8 @@ import {
   SlidersHorizontal,
   MoreVertical,
   ArrowUpDown,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { getDomainFromUrl, cleanMovieTitle } from '../utils/storage';
 import { ReorderItemModal } from './ReorderItemModal';
@@ -39,6 +41,8 @@ interface FavoritesModalProps {
   hiddenFavoriteSections?: FavoriteColor[];
   onToggleHideFavoriteSection?: (sectionId: FavoriteColor) => void;
   onReorderFavoriteMovie?: (movieId: string, newPosition: number, targetSection?: FavoriteColor | 'all') => void;
+  onExportFavorites?: () => void;
+  onRestoreFavorites?: () => void;
 }
 
 export const FavoritesModal: React.FC<FavoritesModalProps> = ({
@@ -55,6 +59,8 @@ export const FavoritesModal: React.FC<FavoritesModalProps> = ({
   hiddenFavoriteSections = [],
   onToggleHideFavoriteSection,
   onReorderFavoriteMovie,
+  onExportFavorites,
+  onRestoreFavorites,
 }) => {
   const [activeTab, setActiveTab] = useState<'all' | 'custom'>('all');
   const [reorderTarget, setReorderTarget] = useState<{
@@ -1011,17 +1017,45 @@ export const FavoritesModal: React.FC<FavoritesModalProps> = ({
         </div>
 
         {/* Modal Footer */}
-        <div className="p-4 border-t border-slate-800 bg-slate-900/80 flex items-center justify-between">
-          <span className="text-xs text-slate-400">
-            يتم حفظ ونقل قوائم المفضلة تلقائياً عند تصدير واستيراد ملفات البيانات (initialData.json)
-          </span>
+        <div className="p-4 border-t border-slate-800 bg-slate-900/95 flex flex-col sm:flex-row items-center justify-between gap-3">
+          <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto">
+            {onExportFavorites && (
+              <button
+                type="button"
+                onClick={onExportFavorites}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl transition-all shadow flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                title="تصدير ملف المفضلة المستقل (fav.json) لمجلد public"
+              >
+                <Download className="w-3.5 h-3.5" />
+                <span>تصدير المفضلة (fav.json)</span>
+              </button>
+            )}
 
-          <button
-            onClick={onClose}
-            className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition-colors"
-          >
-            إغلاق
-          </button>
+            {onRestoreFavorites && (
+              <button
+                type="button"
+                onClick={onRestoreFavorites}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 text-xs font-black rounded-xl transition-all shadow-sm flex items-center gap-1.5 active:scale-95 cursor-pointer"
+                title="استعادة وتطبيق بيانات المفضلة من ملف fav.json في مجلد public"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
+                <span>استعادة المفضلة من fav.json</span>
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
+            <span className="text-[11px] text-slate-400">
+              ملف المفضلة <code className="text-amber-300 bg-slate-950 px-1 py-0.5 rounded font-mono">fav.json</code> مستقل بالكامل عن ملف الأقسام
+            </span>
+
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-xl transition-colors cursor-pointer"
+            >
+              إغلاق
+            </button>
+          </div>
         </div>
       </div>
 

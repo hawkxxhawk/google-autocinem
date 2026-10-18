@@ -11,7 +11,7 @@ import {
 } from '../types';
 import { MovieCard } from './MovieCard';
 import { Pagination } from './Pagination';
-import { sortMovies, getFolderTextColor } from '../utils/storage';
+import { sortMovies, getFolderTextColor, normalizeMovieUrl, normalizeMovieTitle } from '../utils/storage';
 import { classifyMoviesWithGemini } from '../utils/aiClassification';
 import { CLASSIFICATION_OPTIONS } from '../utils/classificationUtils';
 import { ReorderItemModal } from './ReorderItemModal';
@@ -76,6 +76,7 @@ interface MovieGridProps {
   ) => void;
   onBulkAddToFavorite?: (movieIds: string[], color: FavoriteColor) => void;
   onReorderFavoriteMovie?: (movieId: string, newPosition: number, targetSection?: FavoriteColor | 'all') => void;
+  onExtractStreams?: (movie: MovieItem) => void;
 }
 
 export const MovieGrid: React.FC<MovieGridProps> = ({
@@ -85,6 +86,7 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
   onUpdateFolder,
   movies,
   onOpenMovie,
+  onExtractStreams,
   onToggleFavorite,
   onBulkAddToFavorite,
   onToggleBroken,
@@ -196,49 +198,52 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
     }
   };
 
-  // Reset page to 1 on folder switch, scope change, or filter/search change
+  // Reset page to 1 and reset searchScope to 'folder' whenever the selected section changes
   useEffect(() => {
     setCurrentPage(1);
-  }, [currentFolder?.id, searchQuery, searchScope, onlyFavorites, activeSort, selectedFavoriteSubFilter]);
+    setSearchScope('folder');
+    setSearchQuery('');
+  }, [currentFolder?.id]);
 
-  // Navigation for previous and next repository/folder (including All Favorites)
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, searchScope, onlyFavorites, activeSort, selectedFavoriteSubFilter]);
+
+  // Visible folders for selector dropdown
   const visibleFolders = folders.filter((f) => !f.isFolderHidden && f.id !== ALL_FAVORITES_FOLDER_ID);
-  const allNavFolders = [ALL_FAVORITES_FOLDER, ...visibleFolders];
-  const currentFolderIndex = currentFolder
-    ? allNavFolders.findIndex((f) => f.id === currentFolder.id)
-    : -1;
 
-  const handlePrevFolder = () => {
-    if (!onSelectFolder || allNavFolders.length <= 1 || currentFolderIndex === -1) return;
-    const prevIdx = (currentFolderIndex - 1 + allNavFolders.length) % allNavFolders.length;
-    onSelectFolder(allNavFolders[prevIdx].id);
-  };
+  // Pre-calculate favorite movies across visible folders with deduplication so identical favorites never appear more than once
+  const allFavMoviesList = useMemo(() => {
+    const rawFavs = movies.filter((m) => {
+      const parentFolder = folderMap.get(m.parentFolderId);
+      return (
+        (m.isFavorite || (m.favoriteListIds && m.favoriteListIds.length > 0)) &&
+        !m.isHidden &&
+        !parentFolder?.isFolderHidden &&
+        parentFolder?.includeInAllFavorites !== false
+      );
+    });
 
-  const handleNextFolder = () => {
-    if (!onSelectFolder || allNavFolders.length <= 1 || currentFolderIndex === -1) return;
-    const nextIdx = (currentFolderIndex + 1) % allNavFolders.length;
-    onSelectFolder(allNavFolders[nextIdx].id);
-  };
+    const seenIds = new Set<string>();
+    const seenUrls = new Set<string>();
+    const seenTitles = new Set<string>();
+    const uniqueFavs: MovieItem[] = [];
 
-  const prevFolderObj =
-    allNavFolders.length > 0 && currentFolderIndex !== -1
-      ? allNavFolders[(currentFolderIndex - 1 + allNavFolders.length) % allNavFolders.length]
-      : null;
-  const nextFolderObj =
-    allNavFolders.length > 0 && currentFolderIndex !== -1
-      ? allNavFolders[(currentFolderIndex + 1) % allNavFolders.length]
-      : null;
+    for (const m of rawFavs) {
+      if (!m || !m.id || seenIds.has(m.id)) continue;
+      const u = normalizeMovieUrl(m.url || m.embedUrl);
+      const t = normalizeMovieTitle(m.title);
 
-  // Pre-calculate favorite movies across visible folders
-  const allFavMoviesList = movies.filter((m) => {
-    const parentFolder = folderMap.get(m.parentFolderId);
-    return (
-      (m.isFavorite || (m.favoriteListIds && m.favoriteListIds.length > 0)) &&
-      !m.isHidden &&
-      !parentFolder?.isFolderHidden &&
-      parentFolder?.includeInAllFavorites !== false
-    );
-  });
+      if (u && seenUrls.has(u)) continue;
+      if (t && t !== 'عنوان غير معروف' && t !== 'unknown' && seenTitles.has(t)) continue;
+
+      seenIds.add(m.id);
+      if (u) seenUrls.add(u);
+      if (t && t !== 'عنوان غير معروف' && t !== 'unknown') seenTitles.add(t);
+      uniqueFavs.push(m);
+    }
+    return uniqueFavs;
+  }, [movies, folders]);
 
   const getEffectiveFavColor = (m: MovieItem): FavoriteColor => {
     if (m.classification === 'red' || m.classification === 'purple') return 'purple';
@@ -257,26 +262,18 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
     return !hiddenFavoriteSections.includes(color);
   }).length;
 
-  if (!currentFolder) {
-    return (
-      <div className="flex flex-col items-center justify-center p-12 text-center text-slate-400 min-h-[300px]">
-        <FolderOpen className="w-16 h-16 text-slate-600 mb-3 animate-pulse" />
-        <h2 className="text-lg font-bold text-white mb-1">No Folder Selected</h2>
-        <p className="text-xs text-slate-400">Select a directory folder above to view its cinema items.</p>
-      </div>
-    );
-  }
-
   // Filter items:
-  // 1. searchScope 'all' searches across all non-hidden movies in all non-hidden folders
+  // 1. searchScope 'all' searches across all non-hidden movies in all non-hidden folders ONLY when there is an active search query entered
   // 2. ALL_FAVORITES_FOLDER_ID collects all favorite movies, filtered by 4 color sub-sections or ALL
-  // 3. Normal folder filters by parentFolderId
-  let folderMovies = searchScope === 'all'
+  // 3. Normal folder filters strictly by parentFolderId (ONLY the selected section)
+  const isGlobalSearchActive = searchScope === 'all' && searchQuery.trim().length > 0;
+
+  const rawCandidateMovies = isGlobalSearchActive
     ? movies.filter((m) => {
         const parentFolder = folderMap.get(m.parentFolderId);
         return !m.isHidden && !parentFolder?.isFolderHidden;
       })
-    : currentFolder.id === ALL_FAVORITES_FOLDER_ID
+    : currentFolder?.id === ALL_FAVORITES_FOLDER_ID
     ? allFavMoviesList.filter((m) => {
         const color: FavoriteColor = getEffectiveFavColor(m);
         if (selectedFavoriteSubFilter === 'all') {
@@ -284,7 +281,34 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
         }
         return color === selectedFavoriteSubFilter;
       })
-    : movies.filter((m) => m.parentFolderId === currentFolder.id && !m.isHidden);
+    : currentFolder
+    ? movies.filter((m) => m.parentFolderId === currentFolder.id && !m.isHidden)
+    : [];
+
+  // Deduplicate items in the section strictly so each item appears exactly ONCE across all pages
+  const uniqueCandidateMovies = useMemo(() => {
+    const seenIds = new Set<string>();
+    const seenUrls = new Set<string>();
+    const seenTitles = new Set<string>();
+    const cleanList: MovieItem[] = [];
+
+    for (const m of rawCandidateMovies) {
+      if (!m || !m.id || seenIds.has(m.id)) continue;
+      const u = normalizeMovieUrl(m.url || m.embedUrl);
+      const t = normalizeMovieTitle(m.title);
+
+      if (u && seenUrls.has(u)) continue;
+      if (t && t !== 'عنوان غير معروف' && t !== 'unknown' && seenTitles.has(t)) continue;
+
+      seenIds.add(m.id);
+      if (u) seenUrls.add(u);
+      if (t && t !== 'عنوان غير معروف' && t !== 'unknown') seenTitles.add(t);
+      cleanList.push(m);
+    }
+    return cleanList;
+  }, [rawCandidateMovies]);
+
+  let folderMovies = uniqueCandidateMovies;
 
   // Search filter matching character by character across title, category, description, url, and folder name
   if (searchQuery.trim()) {
@@ -309,7 +333,7 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
   }
 
   // Apply sorting (use folder.sortBy by default, or activeSort if user manually picked one)
-  const effectiveSort = activeSort || currentFolder.sortBy;
+  const effectiveSort = activeSort || currentFolder?.sortBy || 'manual';
   const sortedMovies = sortMovies(folderMovies, effectiveSort);
 
   // Pagination calculation
@@ -331,6 +355,31 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
       });
     }
   };
+
+  // Keyboard Arrow Navigation strictly for pages within the selected section
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger if user is typing in an input, textarea, or select
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+      if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
+        return;
+      }
+
+      // In RTL Arabic layout: Left arrow = Next page, Right arrow = Previous page
+      if (e.key === 'ArrowLeft') {
+        if (currentPage < totalPages) {
+          handlePageChange(currentPage + 1);
+        }
+      } else if (e.key === 'ArrowRight') {
+        if (currentPage > 1) {
+          handlePageChange(currentPage - 1);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [currentPage, totalPages]);
 
   const handleToggleExcludeMovie = (id: string) => {
     setExcludedMovieIds((prev) => {
@@ -422,6 +471,16 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
     }
   };
 
+  if (!currentFolder) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 text-center text-slate-400 min-h-[300px]">
+        <FolderOpen className="w-16 h-16 text-slate-600 mb-3 animate-pulse" />
+        <h2 className="text-lg font-bold text-white mb-1">No Folder Selected</h2>
+        <p className="text-xs text-slate-400">Select a directory folder above to view its cinema items.</p>
+      </div>
+    );
+  }
+
   return (
     <div
       onDragOver={handleDragOver}
@@ -496,7 +555,11 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
               <select
                 id="select-folder-grid-header"
                 value={currentFolder.id}
-                onChange={(e) => onSelectFolder && onSelectFolder(e.target.value)}
+                onChange={(e) => {
+                  setSearchScope('folder');
+                  setSearchQuery('');
+                  if (onSelectFolder) onSelectFolder(e.target.value);
+                }}
                 style={
                   getFolderTextColor(currentFolder.name)
                     ? { color: getFolderTextColor(currentFolder.name) }
@@ -610,32 +673,35 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
               </div>
             )}
 
-            {/* Previous & Next Repository Navigation Arrows */}
-            {onSelectFolder && visibleFolders.length > 1 && (
-              <div className="flex items-center gap-1 bg-indigo-950/90 border-2 border-indigo-500/60 rounded-lg px-1.5 py-0.5 shadow-md">
+            {/* Page Navigation Arrows strictly within the chosen section */}
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1 bg-indigo-950/90 border-2 border-indigo-500/60 rounded-lg px-2 py-0.5 shadow-md">
                 <button
                   type="button"
-                  id="btn-prev-folder"
-                  onClick={handlePrevFolder}
-                  title={prevFolderObj ? `المستودع السابق: ${prevFolderObj.name}` : 'المستودع السابق'}
-                  className="px-2 py-1 rounded-md bg-indigo-900/80 hover:bg-indigo-600 active:bg-indigo-700 text-indigo-100 hover:text-white transition-all border border-indigo-400/50 flex items-center gap-1 text-xs sm:text-sm font-black cursor-pointer shadow-sm active:scale-95"
+                  id="btn-prev-page-header"
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage <= 1}
+                  title="الصفحة السابقة لهذا القسم المحدد"
+                  className="px-2 py-1 rounded-md bg-indigo-900/80 hover:bg-indigo-600 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-indigo-900/80 active:bg-indigo-700 text-indigo-100 hover:text-white transition-all border border-indigo-400/50 flex items-center gap-1 text-xs sm:text-sm font-black cursor-pointer shadow-sm active:scale-95"
                 >
                   <ChevronRight className="w-4 h-4 text-amber-300 stroke-[2.5]" />
                   <span>السابق</span>
                 </button>
 
-                {currentFolderIndex !== -1 && (
-                  <span className="text-xs sm:text-sm font-mono font-black text-amber-300 px-1 select-none">
-                    {currentFolderIndex + 1}/{visibleFolders.length}
-                  </span>
-                )}
+                <span
+                  className="text-xs sm:text-sm font-mono font-black text-amber-300 px-1.5 select-none"
+                  title={`صفحة ${currentPage} من إجمالي ${totalPages} صفحات في هذا القسم فقط`}
+                >
+                  صفحة {currentPage}/{totalPages}
+                </span>
 
                 <button
                   type="button"
-                  id="btn-next-folder"
-                  onClick={handleNextFolder}
-                  title={nextFolderObj ? `المستودع التالي: ${nextFolderObj.name}` : 'المستودع التالي'}
-                  className="px-2 py-1 rounded-md bg-indigo-900/80 hover:bg-indigo-600 active:bg-indigo-700 text-indigo-100 hover:text-white transition-all border border-indigo-400/50 flex items-center gap-1 text-xs sm:text-sm font-black cursor-pointer shadow-sm active:scale-95"
+                  id="btn-next-page-header"
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage >= totalPages}
+                  title="الصفحة التالية لهذا القسم المحدد"
+                  className="px-2 py-1 rounded-md bg-indigo-900/80 hover:bg-indigo-600 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-indigo-900/80 active:bg-indigo-700 text-indigo-100 hover:text-white transition-all border border-indigo-400/50 flex items-center gap-1 text-xs sm:text-sm font-black cursor-pointer shadow-sm active:scale-95"
                 >
                   <span>التالي</span>
                   <ChevronLeft className="w-4 h-4 text-amber-300 stroke-[2.5]" />
@@ -643,10 +709,12 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
               </div>
             )}
 
-            <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 shadow-sm flex items-center gap-1.5">
-              <span>{sortedMovies.length} عنصر</span>
-              <span className="text-red-500 font-extrabold font-mono text-sm" title="العدد الإجمالي للعناصر في التطبيق إجمالاً">
-                ({movies.length})
+            <span className="text-xs font-extrabold px-2.5 py-1 rounded-lg bg-slate-800 text-slate-200 border border-slate-700 shadow-sm flex items-center gap-1.5" title={`محتويات هذا القسم: ${sortedMovies.length} عنصر | إجمالي كافة مستودعات التطبيق: ${movies.length} عنصر`}>
+              <span className="text-indigo-300 font-bold">{sortedMovies.length} عنصر بهذا القسم</span>
+              <span className="text-slate-500 font-normal">|</span>
+              <span className="text-slate-400 font-medium text-[11px] flex items-center gap-1" title="العدد الإجمالي لجميع الأفلام والمسلسلات في كل المستودعات">
+                إجمالي التطبيق:
+                <span className="text-amber-400 font-mono font-bold">{movies.length}</span>
               </span>
             </span>
           </div>
@@ -1106,7 +1174,7 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
 
             return (
               <MovieCard
-                key={movie.id}
+                key={`${currentPage}-${movie.id}-${index}`}
                 movie={movie}
                 itemIndex={itemIndex}
                 folderName={folderDisplayName}
@@ -1114,6 +1182,7 @@ export const MovieGrid: React.FC<MovieGridProps> = ({
                 isAllFavorites={currentFolder?.id === ALL_FAVORITES_FOLDER_ID}
                 onSelectFolder={onSelectFolder}
                 onOpenMovie={onOpenMovie}
+                onExtractStreams={onExtractStreams}
                 onToggleFavorite={onToggleFavorite}
                 onToggleBroken={onToggleBroken}
                 onToggleHide={onToggleHide}

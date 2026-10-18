@@ -133,6 +133,9 @@ interface SettingsModalProps {
   onOpenMovieModal: () => void;
   onOpenJsonImportModal: () => void;
   onExportData: (targetChunkIndex?: number) => void;
+  onExportSections?: () => void;
+  onExportFavorites?: () => void;
+  onRestoreFavorites?: () => void;
   onOpenKotlinModal: () => void;
   onResetData: () => void;
   onRandomFolder: () => void;
@@ -162,6 +165,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenMovieModal,
   onOpenJsonImportModal,
   onExportData,
+  onExportSections,
+  onExportFavorites,
+  onRestoreFavorites,
   onOpenKotlinModal,
   onResetData,
   onRandomFolder,
@@ -907,12 +913,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
 
                 {/* Export JSON */}
-                {/* Export Updates & New Additions (initialData2.json) - RECOMMENDED */}
+                {/* 1. Export Sections (initialData.json) */}
                 <button
                   type="button"
                   onClick={() => {
                     onClose();
-                    onExportData(2);
+                    if (onExportSections) {
+                      onExportSections();
+                    } else {
+                      onExportData(1);
+                    }
+                  }}
+                  className="flex items-center justify-between p-3.5 rounded-xl bg-emerald-950/30 hover:bg-emerald-900/40 border border-emerald-500/40 text-emerald-200 transition-all text-sm font-black active:scale-95 text-right cursor-pointer shadow-sm group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <Database className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
+                    <div>
+                      <div className="text-emerald-300 font-black flex items-center gap-1.5">
+                        <span>تصدير بيانات الأقسام (initialData.json)</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500 text-slate-950 font-black">أساسي</span>
+                      </div>
+                      <div className="text-[11px] text-emerald-200/80 font-normal">
+                        تصدير كافة الأقسام والمستودعات والأفلام - يُنسخ لـ public لاستيراد كامل بيانات الأقسام
+                      </div>
+                    </div>
+                  </div>
+                  <Download className="w-4 h-4 text-emerald-400" />
+                </button>
+
+                {/* 2. Export Favorites Independently (fav.json) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    if (onExportFavorites) {
+                      onExportFavorites();
+                    }
                   }}
                   className="flex items-center justify-between p-3.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-200 transition-all text-sm font-black active:scale-95 text-right cursor-pointer shadow-sm group"
                 >
@@ -920,66 +956,62 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <Sparkles className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
                     <div>
                       <div className="text-amber-300 font-black flex items-center gap-1.5">
-                        <span>تصدير ملف التحديثات والإضافات فقط (initialData2.json)</span>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500 text-slate-950 font-black">موصى به</span>
+                        <span>تصدير ملف المفضلة المستقل (fav.json)</span>
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500 text-slate-950 font-black">مستقل</span>
                       </div>
                       <div className="text-[11px] text-amber-200/80 font-normal">
-                        الملف الوحيد المطلوب نسخه ونقله لمجلد public عند عمل إضافات أو تعديلات جديدة
+                        تصدير كل المفضلة وقوائمها المخصصة في ملف منفصل (fav.json) يوضع في مجلد public
                       </div>
                     </div>
                   </div>
                   <Download className="w-4 h-4 text-amber-400" />
                 </button>
 
-                {/* Export Base Dataset (initialData.json) */}
+                {/* 3. Restore Favorites from fav.json */}
+                {onRestoreFavorites && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onRestoreFavorites();
+                    }}
+                    className="flex items-center justify-between p-3.5 rounded-xl bg-amber-950/30 hover:bg-amber-900/40 border border-amber-600/30 text-amber-200 transition-all text-sm font-black active:scale-95 text-right cursor-pointer shadow-sm group"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <RotateCcw className="w-5 h-5 text-amber-400 group-hover:scale-110 transition-transform" />
+                      <div>
+                        <div className="text-amber-300 font-black">استعادة المفضلة من (fav.json)</div>
+                        <div className="text-[11px] text-amber-200/70 font-normal">
+                          استيراد وتطبيق بيانات كل المفضلة وقوائمها مباشرة من ملف fav.json في public
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronLeft className="w-4 h-4 text-amber-400" />
+                  </button>
+                )}
+
+                {/* 4. Reset & Restore Sections from initialData.json */}
                 <button
                   type="button"
                   onClick={() => {
                     onClose();
-                    onExportData(1);
+                    onResetData();
                   }}
                   className="flex items-center justify-between p-3.5 rounded-xl bg-slate-850 hover:bg-slate-800 border border-slate-700 text-slate-200 transition-all text-sm font-black active:scale-95 text-right cursor-pointer shadow-sm group"
                 >
                   <div className="flex items-center gap-2.5">
-                    <Database className="w-5 h-5 text-emerald-400 group-hover:scale-110 transition-transform" />
+                    <RotateCcw className="w-5 h-5 text-sky-400 group-hover:scale-110 transition-transform" />
                     <div>
-                      <div className="text-white font-black">تصدير الملف الأساسي الشامل (initialData.json)</div>
+                      <div className="text-white font-black">استعادة الأقسام من initialData.json</div>
                       <div className="text-[11px] text-slate-400 font-normal">
-                        يحتوي على كافة العناصر الحالية (22,815+ عنصر) - يُنسخ لـ public مرة واحدة فقط
+                        استيراد كامل بيانات الأقسام والمستودعات من ملف initialData.json الأصلي
                       </div>
                     </div>
                   </div>
-                  <Download className="w-4 h-4 text-slate-400" />
+                  <ChevronLeft className="w-4 h-4 text-slate-400" />
                 </button>
 
-                {/* Consolidate All into Base initialData.json */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const ok = window.confirm(
-                      'هل تريد تثبيت ودمج كافة العناصر والتعديلات الحالية داخل الملف الأساسي (initialData.json) وتصفير ملف التحديثات؟\n\n' +
-                      'بعد ذلك سيصبح الملف الأساسي شاملاً لكل شيء كبداية جديدة نظيفة.'
-                    );
-                    if (ok) {
-                      const res = await consolidateBaseData();
-                      alert(res.message);
-                    }
-                  }}
-                  className="flex items-center justify-between p-3.5 rounded-xl bg-sky-950/30 hover:bg-sky-900/40 border border-sky-500/30 text-sky-200 transition-all text-sm font-black active:scale-95 text-right cursor-pointer shadow-sm group"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <Layers className="w-5 h-5 text-sky-400 group-hover:scale-110 transition-transform" />
-                    <div>
-                      <div className="text-sky-300 font-black">تثبيت الكل داخل الملف الأساسي (Consolidate into Base)</div>
-                      <div className="text-[11px] text-sky-200/70 font-normal">
-                        دمج كافة العناصر الحالية والتعديلات نهائياً في initialData.json وتصفير ملف التحديثات
-                      </div>
-                    </div>
-                  </div>
-                  <CheckCircle2 className="w-4 h-4 text-sky-400" />
-                </button>
-
-                {/* Import JSON */}
+                {/* 5. Import JSON file */}
                 <button
                   type="button"
                   onClick={() => {
@@ -991,30 +1023,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="flex items-center gap-2.5">
                     <FileJson className="w-5 h-5 text-purple-400" />
                     <div>
-                      <div className="text-white font-black">استيراد وتغذية JSON</div>
-                      <div className="text-[11px] text-slate-400 font-normal">استيراد قوائم ومستودعات جاهزة ومدمجة</div>
+                      <div className="text-white font-black">استيراد وتغذية JSON (ملف خارجي)</div>
+                      <div className="text-[11px] text-slate-400 font-normal">سحب وإفلات أو اختيار أي ملف JSON لاستيراده فوراً</div>
                     </div>
                   </div>
                   <ChevronLeft className="w-4 h-4 text-purple-300" />
-                </button>
-
-                {/* Reset Initial Data */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onResetData();
-                  }}
-                  className="flex items-center justify-between p-3.5 rounded-xl bg-red-950/30 hover:bg-red-950/50 border border-red-500/30 text-red-300 transition-all text-sm font-black active:scale-95 text-right cursor-pointer shadow-sm"
-                >
-                  <div className="flex items-center gap-2.5">
-                    <RotateCcw className="w-5 h-5 text-amber-400" />
-                    <div>
-                      <div className="text-amber-300 font-black">استعادة الوضع الافتراضي</div>
-                      <div className="text-[11px] text-slate-400 font-normal">إعادة ضبط البيانات من initialData.json الأصلي</div>
-                    </div>
-                  </div>
-                  <ChevronLeft className="w-4 h-4 text-amber-400" />
                 </button>
               </div>
             </div>

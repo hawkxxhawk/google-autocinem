@@ -39,9 +39,63 @@ export const cleanMovieTitle = (title: string): string => {
   return clean.length > 0 ? clean : title;
 };
 
-// Clean single movie item: title and extract duration if missing
+// Helper to extract a readable Arabic/English title from URL slug when title is missing or unknown
+export const extractTitleFromUrl = (url?: string): string | null => {
+  if (!url) return null;
+  try {
+    const raw = url.trim();
+    const parsed = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const last = segments[segments.length - 1];
+    if (last && last.length > 2) {
+      let decoded = decodeURIComponent(last);
+      // Remove file extension if present
+      let slug = decoded.replace(/\.[a-zA-Z0-9]+$/, '');
+      // Replace dashes and underscores with spaces
+      slug = slug.replace(/[-_]+/g, ' ').trim();
+      const cleaned = cleanMovieTitle(slug);
+      if (cleaned && cleaned.length > 2) return cleaned;
+    }
+  } catch (_) {}
+  return null;
+};
+
+// Helper to normalize URL for duplicate comparison
+export const normalizeMovieUrl = (url?: string): string => {
+  if (!url) return '';
+  let u = url.trim().toLowerCase();
+  u = u.replace(/\/+$/, '');
+  u = u.replace(/^http:\/\//, 'https://');
+  try {
+    const parsed = new URL(u.startsWith('http') ? u : `https://${u}`);
+    parsed.searchParams.delete('utm_source');
+    parsed.searchParams.delete('utm_medium');
+    parsed.searchParams.delete('utm_campaign');
+    parsed.searchParams.delete('fbclid');
+    return parsed.toString().replace(/\/+$/, '');
+  } catch (_) {
+    return u;
+  }
+};
+
+// Helper to normalize Title for duplicate comparison
+export const normalizeMovieTitle = (title?: string): string => {
+  if (!title) return '';
+  return cleanMovieTitle(title).trim().toLowerCase().replace(/\s+/g, ' ');
+};
+
+// Clean single movie item: title and extract duration if missing, resolve unknown titles from URL
 export const cleanMovieItem = (movie: MovieItem): MovieItem => {
-  const cleanedTitle = cleanMovieTitle(movie.title);
+  let title = movie.title || '';
+  const trimmedTitle = title.trim();
+  if (!trimmedTitle || trimmedTitle === 'عنوان غير معروف' || trimmedTitle.toLowerCase() === 'unknown') {
+    const extracted = extractTitleFromUrl(movie.url || movie.embedUrl);
+    if (extracted) {
+      title = extracted;
+    }
+  }
+
+  const cleanedTitle = cleanMovieTitle(title);
   let duration = movie.duration;
   if (!duration) {
     const durMatch = (movie.title || '').match(
@@ -72,6 +126,81 @@ export const cleanAllMovieItems = (
     return m;
   });
   return { cleanedMovies, modifiedCount };
+};
+
+// Deduplicate movies within folders and overall database to prevent repeated items across pages
+export const deduplicateMovieItems = (
+  movies: MovieItem[]
+): { deduplicatedMovies: MovieItem[]; removedDuplicatesCount: number } => {
+  const seenIds = new Set<string>();
+  const seenFolderUrl = new Set<string>();
+  const seenFolderTitle = new Set<string>();
+  let removedDuplicatesCount = 0;
+  const deduplicatedMovies: MovieItem[] = [];
+
+  for (const m of movies) {
+    if (!m || !m.id) continue;
+
+    // Enforce unique ID
+    if (seenIds.has(m.id)) {
+      removedDuplicatesCount++;
+      continue;
+    }
+
+    const normUrl = normalizeMovieUrl(m.url || m.embedUrl);
+    const normTitle = normalizeMovieTitle(m.title);
+    const folderId = m.parentFolderId || '';
+
+    const urlKey = `${folderId}|||${normUrl}`;
+    const titleKey = `${folderId}|||${normTitle}`;
+
+    // Duplicate URL in same folder
+    if (normUrl && seenFolderUrl.has(urlKey)) {
+      removedDuplicatesCount++;
+      const existing = deduplicatedMovies.find(
+        (x) => x.parentFolderId === folderId && normalizeMovieUrl(x.url || x.embedUrl) === normUrl
+      );
+      if (existing) {
+        if (!existing.isFavorite && m.isFavorite) {
+          existing.isFavorite = true;
+          existing.favoriteColor = m.favoriteColor;
+        }
+        if (!existing.classification && m.classification) {
+          existing.classification = m.classification;
+          existing.classificationReason = m.classificationReason;
+        }
+      }
+      continue;
+    }
+
+    // Duplicate title in same folder (ignore generic unknown titles)
+    if (normTitle && normTitle !== 'عنوان غير معروف' && normTitle !== 'unknown' && seenFolderTitle.has(titleKey)) {
+      removedDuplicatesCount++;
+      const existing = deduplicatedMovies.find(
+        (x) => x.parentFolderId === folderId && normalizeMovieTitle(x.title) === normTitle
+      );
+      if (existing) {
+        if (!existing.isFavorite && m.isFavorite) {
+          existing.isFavorite = true;
+          existing.favoriteColor = m.favoriteColor;
+        }
+        if (!existing.classification && m.classification) {
+          existing.classification = m.classification;
+          existing.classificationReason = m.classificationReason;
+        }
+      }
+      continue;
+    }
+
+    seenIds.add(m.id);
+    if (normUrl) seenFolderUrl.add(urlKey);
+    if (normTitle && normTitle !== 'عنوان غير معروف' && normTitle !== 'unknown') {
+      seenFolderTitle.add(titleKey);
+    }
+    deduplicatedMovies.push(m);
+  }
+
+  return { deduplicatedMovies, removedDuplicatesCount };
 };
 
 const FOLDERS_KEY = 'autocinema_folders_v1';
@@ -293,12 +422,32 @@ export function sortMovies(movies: MovieItem[], sortBy: SortOption): MovieItem[]
       return items.sort((a, b) => {
         const domA = getDomainFromUrl(a.url || a.embedUrl);
         const domB = getDomainFromUrl(b.url || b.embedUrl);
-        return domA.localeCompare(domB) || a.title.localeCompare(b.title);
+        const domCmp = domA.localeCompare(domB);
+        if (domCmp !== 0) return domCmp;
+        const titleCmp = (a.title || '').localeCompare(b.title || '');
+        if (titleCmp !== 0) return titleCmp;
+        return (a.id || '').localeCompare(b.id || '');
       });
     case 'title':
-      return items.sort((a, b) => a.title.localeCompare(b.title));
+      return items.sort((a, b) => {
+        const titleCmp = (a.title || '').localeCompare(b.title || '');
+        if (titleCmp !== 0) return titleCmp;
+        const timeA = new Date(a.addedAt || 0).getTime();
+        const timeB = new Date(b.addedAt || 0).getTime();
+        const dateDiff = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+        if (dateDiff !== 0) return dateDiff;
+        return (a.id || '').localeCompare(b.id || '');
+      });
     case 'date':
-      return items.sort((a, b) => new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime());
+      return items.sort((a, b) => {
+        const timeA = new Date(a.addedAt || 0).getTime();
+        const timeB = new Date(b.addedAt || 0).getTime();
+        const dateDiff = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+        if (dateDiff !== 0) return dateDiff;
+        const titleCmp = (a.title || '').localeCompare(b.title || '');
+        if (titleCmp !== 0) return titleCmp;
+        return (a.id || '').localeCompare(b.id || '');
+      });
     case 'manual':
       return items.sort((a, b) => {
         // Favorited items ALWAYS appear at the top when sorting manually
@@ -308,7 +457,13 @@ export function sortMovies(movies: MovieItem[], sortBy: SortOption): MovieItem[]
         const orderB = b.favoriteOrder ?? b.manualOrder ?? 999999;
         const orderDiff = orderA - orderB;
         if (orderDiff !== 0) return orderDiff;
-        return new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime();
+        const timeA = new Date(a.addedAt || 0).getTime();
+        const timeB = new Date(b.addedAt || 0).getTime();
+        const dateDiff = (isNaN(timeB) ? 0 : timeB) - (isNaN(timeA) ? 0 : timeA);
+        if (dateDiff !== 0) return dateDiff;
+        const titleCmp = (a.title || '').localeCompare(b.title || '');
+        if (titleCmp !== 0) return titleCmp;
+        return (a.id || '').localeCompare(b.id || '');
       });
     default:
       return items;
@@ -363,6 +518,34 @@ export interface AppDataChunk {
   newMovies?: MovieItem[];
   modifiedMovies?: MovieItem[];
   deletedMovieIds?: string[];
+}
+
+export interface FavJsonData {
+  fileName: string;
+  appName: string;
+  version: string;
+  exportedAt: string;
+  notice: string;
+  allFavorites: {
+    repository: Folder;
+    totalFavoritesCount: number;
+    movieIds: string[];
+    sections?: {
+      green: string[];
+      yellow: string[];
+      purple: string[];
+      black: string[];
+    };
+    sectionsCount?: {
+      green: number;
+      yellow: number;
+      purple: number;
+      black: number;
+    };
+    movies?: MovieItem[];
+  };
+  favoriteLists: FavoriteList[];
+  hiddenFavoriteSections?: FavoriteColor[];
 }
 
 /**
@@ -596,7 +779,7 @@ export async function fetchInitialDataJson(): Promise<{
 
   const combinedMovies: MovieItem[] = [...primaryData.movies];
   const combinedFolders: Folder[] = [...primaryData.folders];
-  const combinedFavLists: FavoriteList[] = primaryData.favoriteLists ? [...primaryData.favoriteLists] : [];
+  let combinedFavLists: FavoriteList[] = primaryData.favoriteLists ? [...primaryData.favoriteLists] : [];
   const seenMovieIds = new Set(combinedMovies.map((m) => m.id));
   const seenFolderIds = new Set(combinedFolders.map((f) => f.id));
   const seenFavListIds = new Set(combinedFavLists.map((l) => l.id));
@@ -663,6 +846,33 @@ export async function fetchInitialDataJson(): Promise<{
     chunkIdx++;
   }
 
+  // 3. Layer independent fav.json if present in public
+  try {
+    const favData = await fetchFavDataJson();
+    if (favData) {
+      const favIdSet = new Set(favData.allFavorites?.movieIds || []);
+      const sec: any = favData.allFavorites?.sections || {};
+      const greenSet = new Set(sec.green || []);
+      const yellowSet = new Set(sec.yellow || []);
+      const purpleSet = new Set(sec.purple || []);
+      const blackSet = new Set(sec.black || []);
+
+      combinedMovies.forEach((m) => {
+        if (favIdSet.has(m.id)) {
+          m.isFavorite = true;
+          if (greenSet.has(m.id)) m.favoriteColor = 'green';
+          else if (purpleSet.has(m.id)) m.favoriteColor = 'purple';
+          else if (blackSet.has(m.id)) m.favoriteColor = 'black';
+          else if (yellowSet.has(m.id)) m.favoriteColor = 'yellow';
+        }
+      });
+
+      if (Array.isArray(favData.favoriteLists) && favData.favoriteLists.length > 0) {
+        combinedFavLists = favData.favoriteLists;
+      }
+    }
+  } catch (_) {}
+
   return {
     folders: combinedFolders,
     movies: combinedMovies,
@@ -687,9 +897,48 @@ export async function resetToDefaultsFromInitialJson(): Promise<{
           ? parsed.favoriteLists
           : loadFavoriteLists();
 
+      let finalMovies = parsed.movies;
+      let finalFavs = favs;
+      let favMsg = '';
+
+      try {
+        const favData = await fetchFavDataJson();
+        if (favData) {
+          const favIdSet = new Set(favData.allFavorites?.movieIds || []);
+          const sec: any = favData.allFavorites?.sections || {};
+          const greenSet = new Set(sec.green || []);
+          const yellowSet = new Set(sec.yellow || []);
+          const purpleSet = new Set(sec.purple || []);
+          const blackSet = new Set(sec.black || []);
+
+          finalMovies = finalMovies.map((m) => {
+            if (favIdSet.has(m.id)) {
+              let col = m.favoriteColor || 'yellow';
+              if (greenSet.has(m.id)) col = 'green';
+              else if (purpleSet.has(m.id)) col = 'purple';
+              else if (blackSet.has(m.id)) col = 'black';
+              else if (yellowSet.has(m.id)) col = 'yellow';
+              return { ...m, isFavorite: true, favoriteColor: col };
+            }
+            return m;
+          });
+
+          if (Array.isArray(favData.favoriteLists) && favData.favoriteLists.length > 0) {
+            finalFavs = favData.favoriteLists;
+          }
+          if (Array.isArray(favData.hiddenFavoriteSections)) {
+            localStorage.setItem(
+              'autocinema_hidden_favorite_sections',
+              JSON.stringify(favData.hiddenFavoriteSections)
+            );
+          }
+          favMsg = `\n• تم دمج وتحديث المفضلة تلقائياً من (fav.json): ${favIdSet.size} عنصر`;
+        }
+      } catch (_) {}
+
       saveFolders(parsed.folders);
-      saveMovies(parsed.movies);
-      saveFavoriteLists(favs);
+      saveMovies(finalMovies);
+      saveFavoriteLists(finalFavs);
 
       const seedTs = parsed.exportedAt || new Date().toISOString();
       localStorage.setItem('autocinema_seeded_timestamp', seedTs);
@@ -699,16 +948,17 @@ export async function resetToDefaultsFromInitialJson(): Promise<{
 
       alert(
         `تمت استعادة البيانات بنجاح من مجلد public!\n\n` +
-        `• الملفات المستعادة: ${chunkNames} (${chunksCount} ملف/ملفات)\n` +
-        `• إجمالي المستودعات: ${parsed.folders.length}\n` +
-        `• إجمالي الأفلام والمسلسلات: ${parsed.movies.length}`
+        `• ملف الأقسام والمحتوى: ${chunkNames} (${chunksCount} ملف/ملفات)\n` +
+        `• إجمالي الأقسام (المستودعات): ${parsed.folders.length}\n` +
+        `• إجمالي الأفلام والمسلسلات: ${finalMovies.length}` +
+        favMsg
       );
 
-      return { folders: parsed.folders, movies: parsed.movies, favoriteLists: favs };
+      return { folders: parsed.folders, movies: finalMovies, favoriteLists: finalFavs };
     } else {
       alert(
         'تنبيه: لم يتم العثور على ملف (initialData.json) في مجلد public.\n\n' +
-        'تأكد من وضع الملف المصدّر داخل مجلد public في مشروعك باسم initialData.json (و initialData2.json إذا تجاوز 2000 عنصر) ثم قم بعمل إعادة استعادة.'
+        'تأكد من وضع الملف المصدّر داخل مجلد public في مشروعك باسم initialData.json ثم قم بعمل إعادة استعادة.'
       );
     }
   } catch (e: any) {
@@ -843,6 +1093,328 @@ export function exportFullAppData(
       `الملف الأساسي يحتوي على كافة العناصر الحالية. يُنسخ لـ public مرة واحدة فقط، وأي إضافات جديدة قادمة ستُصدر تلقائياً في initialData2.json دون الحاجة لتكرار نسخ هذا الملف.`
     );
   }
+}
+
+/**
+ * 1. Export Favorites (fav.json):
+ * Exports All Favorites and custom favorite lists independently to /public/fav.json
+ */
+export async function exportFavoritesData(
+  movies: MovieItem[],
+  favoriteLists?: FavoriteList[],
+  hiddenFavoriteSections?: FavoriteColor[]
+): Promise<void> {
+  const activeMovies = movies && movies.length > 0 ? movies : loadMovies();
+  const listsToSave = favoriteLists && favoriteLists.length > 0 ? favoriteLists : loadFavoriteLists();
+  const activeHiddenSections =
+    hiddenFavoriteSections ||
+    (() => {
+      try {
+        const s = localStorage.getItem('autocinema_hidden_favorite_sections');
+        return s ? JSON.parse(s) : [];
+      } catch {
+        return [];
+      }
+    })();
+
+  const favMovies = activeMovies.filter(
+    (m) => (m.isFavorite || (m.favoriteListIds && m.favoriteListIds.length > 0)) && !m.isHidden
+  );
+
+  const getEffectiveFavColor = (m: MovieItem): FavoriteColor => {
+    if (m.classification === 'red' || m.classification === 'purple') return 'purple';
+    return m.favoriteColor || 'yellow';
+  };
+
+  const green = favMovies.filter((m) => getEffectiveFavColor(m) === 'green');
+  const yellow = favMovies.filter((m) => getEffectiveFavColor(m) === 'yellow');
+  const purple = favMovies.filter((m) => getEffectiveFavColor(m) === 'purple');
+  const black = favMovies.filter((m) => getEffectiveFavColor(m) === 'black');
+
+  const favJsonData: FavJsonData = {
+    fileName: 'fav.json',
+    appName: 'AutoCinema',
+    version: '2.0',
+    exportedAt: new Date().toISOString(),
+    notice:
+      'ملف المفضلة المستقل (fav.json) - يحتوي على كافة عناصر كل المفضلة (All Favorites) وقوائم المفضلة المخصصة، يُوضع في مجلد public لاستعادة وتحديث المفضلة مستقلاً عن الأقسام',
+    allFavorites: {
+      repository: ALL_FAVORITES_FOLDER,
+      totalFavoritesCount: favMovies.length,
+      movieIds: favMovies.map((m) => m.id),
+      sections: {
+        green: green.map((m) => m.id),
+        yellow: yellow.map((m) => m.id),
+        purple: purple.map((m) => m.id),
+        black: black.map((m) => m.id),
+      },
+      sectionsCount: {
+        green: green.length,
+        yellow: yellow.length,
+        purple: purple.length,
+        black: black.length,
+      },
+      movies: favMovies,
+    },
+    favoriteLists: listsToSave,
+    hiddenFavoriteSections: activeHiddenSections,
+  };
+
+  // Sync to server disk /public/fav.json
+  try {
+    await fetch('/api/update-fav-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(favJsonData),
+    });
+  } catch (_) {}
+
+  // Trigger browser download of fav.json
+  const jsonString = JSON.stringify(favJsonData, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'fav.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  alert(
+    `تم تصدير وحفظ ملف المفضلة المستقل (fav.json) بنجاح!\n\n` +
+      `• إجمالي عناصر المفضلة المصدّرة: ${favMovies.length} عنصر\n` +
+      `• أقسام المفضلة:\n` +
+      `  - 🟢 مفضلة 1 خضراء: ${green.length}\n` +
+      `  - 🟡 مفضلة 2 صفراء: ${yellow.length}\n` +
+      `  - 🟣 مفضلة 3 بنفسجي: ${purple.length}\n` +
+      `  - ⚫ مفضلة 4 أسود: ${black.length}\n` +
+      `• عدد قوائم المفضلة المخصصة: ${listsToSave.length} قائمة\n\n` +
+      `💡 ضع هذا الملف داخل مجلد public باسم (fav.json) لتحديث أو استعادة كافة بيانات المفضلة بصورة مستقلة تماماً عن بيانات الأقسام!`
+  );
+}
+
+/**
+ * Robustly fetches fav.json from server API or /fav.json with cache buster
+ */
+export async function fetchFavDataJson(): Promise<FavJsonData | null> {
+  // 1. Try server API endpoint
+  try {
+    const apiRes = await fetch('/api/get-fav-data', { cache: 'no-store' });
+    if (apiRes.ok) {
+      const data = await apiRes.json();
+      if (data && (data.allFavorites || Array.isArray(data.favoriteLists) || Array.isArray(data.movieIds))) {
+        return data as FavJsonData;
+      }
+    }
+  } catch (_) {}
+
+  // 2. Direct candidate file paths in public
+  const cacheBuster = Date.now();
+  const candidates = [
+    `/fav.json?v=${cacheBuster}`,
+    `./fav.json?v=${cacheBuster}`,
+    `/fav.json`,
+    `./fav.json`,
+  ];
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.ok) {
+        const text = await res.text();
+        if (text && text.trim().startsWith('{')) {
+          const parsed = JSON.parse(text);
+          if (parsed && (parsed.allFavorites || Array.isArray(parsed.favoriteLists) || Array.isArray(parsed.movieIds))) {
+            return parsed as FavJsonData;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  return null;
+}
+
+/**
+ * Restores and applies favorites independently from fav.json
+ */
+export async function restoreFavoritesFromFavJson(
+  currentMovies: MovieItem[],
+  currentFolders: Folder[]
+): Promise<{
+  updatedMovies: MovieItem[];
+  updatedFavLists: FavoriteList[];
+  hiddenSections?: FavoriteColor[];
+  count: number;
+} | null> {
+  const favData = await fetchFavDataJson();
+  if (!favData) {
+    alert(
+      'تنبيه: لم يتم العثور على ملف (fav.json) في مجلد public.\n\n' +
+        'تأكد من وضع ملف المفضلة المصدّر باسم fav.json داخل مجلد public في مشروعك ثم أعد المحاولة.'
+    );
+    return null;
+  }
+
+  // Extract favorite movie IDs, colors, orders, and list mappings
+  const favMetaMap = new Map<string, { color?: FavoriteColor; order?: number; listIds?: string[] }>();
+
+  if (favData.allFavorites?.sections) {
+    const sec = favData.allFavorites.sections;
+    if (Array.isArray(sec.green)) sec.green.forEach((id) => favMetaMap.set(id, { color: 'green' }));
+    if (Array.isArray(sec.yellow)) sec.yellow.forEach((id) => favMetaMap.set(id, { color: 'yellow' }));
+    if (Array.isArray(sec.purple)) sec.purple.forEach((id) => favMetaMap.set(id, { color: 'purple' }));
+    if (Array.isArray(sec.black)) sec.black.forEach((id) => favMetaMap.set(id, { color: 'black' }));
+  }
+
+  if (Array.isArray(favData.allFavorites?.movieIds)) {
+    favData.allFavorites.movieIds.forEach((id) => {
+      if (!favMetaMap.has(id)) favMetaMap.set(id, { color: 'yellow' });
+    });
+  }
+
+  const incomingFavMovies: MovieItem[] = Array.isArray(favData.allFavorites?.movies)
+    ? favData.allFavorites.movies
+    : Array.isArray((favData as any).movies)
+    ? (favData as any).movies
+    : [];
+
+  incomingFavMovies.forEach((m) => {
+    if (m && m.id) {
+      favMetaMap.set(m.id, {
+        color: m.favoriteColor || favMetaMap.get(m.id)?.color || 'yellow',
+        order: m.favoriteOrder,
+        listIds: m.favoriteListIds,
+      });
+    }
+  });
+
+  const movieMap = new Map(currentMovies.map((m) => [m.id, { ...m }]));
+  let appliedCount = 0;
+
+  for (const [id, meta] of favMetaMap.entries()) {
+    if (movieMap.has(id)) {
+      const existing = movieMap.get(id)!;
+      existing.isFavorite = true;
+      if (meta.color) existing.favoriteColor = meta.color;
+      if (meta.order !== undefined) existing.favoriteOrder = meta.order;
+      if (meta.listIds) existing.favoriteListIds = meta.listIds;
+      appliedCount++;
+    }
+  }
+
+  // If there are favorite movies in fav.json that don't exist in currentMovies, add them
+  const currentIds = new Set(currentMovies.map((m) => m.id));
+  const newFavMoviesToAdd: MovieItem[] = [];
+  const defaultFolderId = currentFolders[0]?.id || 'folder-default';
+
+  for (const favM of incomingFavMovies) {
+    if (favM && favM.id && !currentIds.has(favM.id)) {
+      newFavMoviesToAdd.push({
+        ...favM,
+        parentFolderId: favM.parentFolderId || defaultFolderId,
+        isFavorite: true,
+        favoriteColor: favM.favoriteColor || 'yellow',
+      });
+      appliedCount++;
+    }
+  }
+
+  const updatedMovies = [...newFavMoviesToAdd, ...Array.from(movieMap.values())];
+  const updatedFavLists =
+    Array.isArray(favData.favoriteLists) && favData.favoriteLists.length > 0
+      ? favData.favoriteLists
+      : loadFavoriteLists();
+  const hiddenSections = Array.isArray(favData.hiddenFavoriteSections) ? favData.hiddenFavoriteSections : [];
+
+  saveMovies(updatedMovies);
+  saveFavoriteLists(updatedFavLists);
+  try {
+    localStorage.setItem('autocinema_hidden_favorite_sections', JSON.stringify(hiddenSections));
+  } catch (_) {}
+
+  // Sync back to server
+  try {
+    await fetch('/api/update-fav-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(favData),
+    });
+  } catch (_) {}
+
+  alert(
+    `تمت استعادة بيانات المفضلة بنجاح من (fav.json)!\n\n` +
+      `• إجمالي عناصر المفضلة المستعادة والمحدثة: ${appliedCount} عنصر\n` +
+      `• قوائم المفضلة المستعادة: ${updatedFavLists.length} قائمة`
+  );
+
+  return {
+    updatedMovies,
+    updatedFavLists,
+    hiddenSections,
+    count: appliedCount,
+  };
+}
+
+/**
+ * 2. Export Sections Data (initialData.json):
+ * Exports all sections / folders and movies to initialData.json
+ */
+export async function exportSectionsData(folders: Folder[], movies: MovieItem[]): Promise<void> {
+  const activeFolders = folders && folders.length > 0 ? folders : loadFolders();
+  const activeMovies = movies && movies.length > 0 ? movies : loadMovies();
+
+  const exportedAt = new Date().toISOString();
+
+  const baseData = {
+    fileName: 'initialData.json',
+    isBaseData: true,
+    chunkIndex: 1,
+    totalChunks: 1,
+    totalItemsCount: activeMovies.length,
+    totalFoldersCount: activeFolders.length,
+    totalItemsNotice: `الملف الأساسي الشامل لكافة الأقسام والمستودعات والمحتوى (${activeFolders.length} قسم، ${activeMovies.length} عنصر) - يُنسخ لـ public لتشغيل واستعادة كامل الأقسام`,
+    appName: 'AutoCinema',
+    version: '2.0',
+    exportedAt,
+    folders: activeFolders,
+    movies: activeMovies,
+  };
+
+  // Sync to server disk /public/initialData.json
+  try {
+    await fetch('/api/update-initial-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        appName: 'AutoCinema',
+        version: '2.0',
+        folders: activeFolders,
+        movies: activeMovies,
+        consolidateBase: true,
+      }),
+    });
+  } catch (_) {}
+
+  // Download initialData.json
+  const jsonString = JSON.stringify(baseData, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'initialData.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  alert(
+    `تم تصدير ملف الأقسام والمستودعات (initialData.json) بنجاح!\n\n` +
+      `• إجمالي الأقسام (المستودعات): ${activeFolders.length} قسم\n` +
+      `• إجمالي الأفلام والمسلسلات: ${activeMovies.length} عنصر\n\n` +
+      `💡 هذا هو الملف الأساسي الذي يحتوي على كافة بيانات الأقسام، ويوضع في مجلد public لاستعادة وتحديث الأقسام، بينما تُدار وتُصدّر المفضلة بصورة مستقلة عبر ملف fav.json.`
+  );
 }
 
 /**
@@ -1080,7 +1652,9 @@ export function parseAndValidateFullAppData(jsonString: string): {
   movies: MovieItem[];
   favoriteLists?: FavoriteList[];
   hiddenFavoriteSections?: FavoriteColor[];
+  allFavorites?: any;
   exportedAt?: string;
+  isFavOnly?: boolean;
 } {
   const parsed = JSON.parse(jsonString);
   let importedFolders: Folder[] = [];
@@ -1148,7 +1722,11 @@ export function parseAndValidateFullAppData(jsonString: string): {
   }
 
   if (importedFolders.length === 0 && importedMovies.length === 0) {
-    throw new Error('الملف لا يحتوي على بيانات مجلدات أو أفلام صالحة.');
+    if (importedFavoriteLists.length > 0 || parsed.allFavorites) {
+      // Valid fav.json standalone file
+    } else {
+      throw new Error('الملف لا يحتوي على بيانات مجلدات أو أفلام أو مفضلة صالحة.');
+    }
   }
 
   // Self-healing: If movies exist with folder IDs not listed in importedFolders, create corresponding folder entries
@@ -1255,8 +1833,10 @@ export function parseAndValidateFullAppData(jsonString: string): {
     folders: importedFolders,
     movies: importedMovies,
     favoriteLists: importedFavoriteLists,
+    allFavorites: parsed.allFavorites,
     hiddenFavoriteSections: Array.isArray(parsed.hiddenFavoriteSections) ? parsed.hiddenFavoriteSections : undefined,
     exportedAt: parsed.exportedAt,
+    isFavOnly: importedFolders.length === 0 && (importedFavoriteLists.length > 0 || Boolean(parsed.allFavorites)),
   };
 }
 
@@ -1289,5 +1869,26 @@ export function getFolderTextColor(folderName: string | undefined): string | und
     return '#facc15'; // Yellow
   }
   return undefined;
+}
+
+export const CINEMA_PLAYLIST_KEY = 'autocinema_theater_playlist';
+
+export function loadCinemaPlaylist(): import('../types').PlaylistItem[] {
+  try {
+    const raw = localStorage.getItem(CINEMA_PLAYLIST_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveCinemaPlaylist(playlist: import('../types').PlaylistItem[]): void {
+  try {
+    localStorage.setItem(CINEMA_PLAYLIST_KEY, JSON.stringify(playlist));
+  } catch (e) {
+    console.warn('Failed to save cinema playlist to localStorage', e);
+  }
 }
 

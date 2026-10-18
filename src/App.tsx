@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Folder, MovieItem, FavoriteList, ViewMode, ALL_FAVORITES_FOLDER_ID, ALL_FAVORITES_FOLDER, ClassificationRating, FavoriteColor } from './types';
+import { Folder, MovieItem, FavoriteList, ViewMode, ALL_FAVORITES_FOLDER_ID, ALL_FAVORITES_FOLDER, ClassificationRating, FavoriteColor, PlaylistItem } from './types';
 import { INITIAL_FOLDERS, INITIAL_MOVIES } from './data/initialData';
 import {
   initStorageAsync,
@@ -14,6 +14,10 @@ import {
   resetToDefaults,
   resetToDefaultsFromInitialJson,
   exportFullAppData,
+  exportFavoritesData,
+  exportSectionsData,
+  restoreFavoritesFromFavJson,
+  fetchFavDataJson,
   checkAndAutoSeedData,
   fetchInitialDataJson,
   mergeAppData,
@@ -21,6 +25,9 @@ import {
   cleanMovieTitle,
   cleanMovieItem,
   cleanAllMovieItems,
+  deduplicateMovieItems,
+  loadCinemaPlaylist,
+  saveCinemaPlaylist,
 } from './utils/storage';
 import { Navbar } from './components/Navbar';
 import { MovieGrid } from './components/MovieGrid';
@@ -34,6 +41,8 @@ import { KotlinCodeModal } from './components/KotlinCodeModal';
 import { DeviceFrame } from './components/DeviceFrame';
 import { PageScrollControls } from './components/PageScrollControls';
 import { ItemClassifierModal } from './components/ItemClassifierModal';
+import { StreamExtractorModal } from './components/StreamExtractorModal';
+import { CinemaScreen } from './components/CinemaScreen';
 
 export default function App() {
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -56,6 +65,70 @@ export default function App() {
   const [isHiddenVaultOpen, setIsHiddenVaultOpen] = useState(false);
   const [isKotlinModalOpen, setIsKotlinModalOpen] = useState(false);
   const [isItemClassifierOpen, setIsItemClassifierOpen] = useState(false);
+
+  // Cinema Screen ("شاشة العرض") and Stream Extractor state
+  const [cinemaPlaylist, setCinemaPlaylist] = useState<PlaylistItem[]>(() => {
+    return loadCinemaPlaylist();
+  });
+  const [isCinemaScreenOpen, setIsCinemaScreenOpen] = useState(false);
+  const [isStreamExtractorOpen, setIsStreamExtractorOpen] = useState(false);
+  const [movieForExtractor, setMovieForExtractor] = useState<MovieItem | null>(null);
+  const [urlForExtractor, setUrlForExtractor] = useState<string>('');
+  const [activeCinemaIndex, setActiveCinemaIndex] = useState(0);
+
+  const handleUpdateCinemaPlaylist = (newPl: PlaylistItem[]) => {
+    setCinemaPlaylist(newPl);
+    saveCinemaPlaylist(newPl);
+  };
+
+  const handleAddToCinemaPlaylist = (item: PlaylistItem) => {
+    setCinemaPlaylist((prev) => {
+      const existsIdx = prev.findIndex((p) => p.selectedStream.url === item.selectedStream.url);
+      let updated: PlaylistItem[];
+      if (existsIdx !== -1) {
+        updated = [...prev];
+        updated[existsIdx] = item;
+      } else {
+        updated = [...prev, item];
+      }
+      saveCinemaPlaylist(updated);
+      return updated;
+    });
+  };
+
+  const handlePlayNowOnScreen = (item: PlaylistItem) => {
+    setCinemaPlaylist((prev) => {
+      const existsIdx = prev.findIndex((p) => p.selectedStream.url === item.selectedStream.url);
+      let updated: PlaylistItem[];
+      let targetIdx = 0;
+      if (existsIdx !== -1) {
+        updated = [...prev];
+        updated[existsIdx] = item;
+        targetIdx = existsIdx;
+      } else {
+        updated = [...prev, item];
+        targetIdx = updated.length - 1;
+      }
+      saveCinemaPlaylist(updated);
+      setActiveCinemaIndex(targetIdx);
+      return updated;
+    });
+    setIsCinemaScreenOpen(true);
+  };
+
+  const handleOpenExtractor = (movieOrUrl?: MovieItem | string) => {
+    if (typeof movieOrUrl === 'string') {
+      setUrlForExtractor(movieOrUrl);
+      setMovieForExtractor(null);
+    } else if (movieOrUrl) {
+      setMovieForExtractor(movieOrUrl);
+      setUrlForExtractor(movieOrUrl.url || movieOrUrl.embedUrl || '');
+    } else {
+      setMovieForExtractor(null);
+      setUrlForExtractor('');
+    }
+    setIsStreamExtractorOpen(true);
+  };
 
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -158,6 +231,12 @@ export default function App() {
         finalMovies = cleanedMovies;
       }
 
+      // Automatically deduplicate movies within sections to prevent any movie from repeating across pages
+      const { deduplicatedMovies, removedDuplicatesCount } = deduplicateMovieItems(finalMovies);
+      if (removedDuplicatesCount > 0) {
+        finalMovies = deduplicatedMovies;
+      }
+
       // Enforce user requirements for All Favorites sections:
       // 1. All movies in List 1 fav -> green section in All Favorites
       // 2. All movies in List 2 fav -> yellow section in All Favorites
@@ -228,7 +307,7 @@ export default function App() {
         return m;
       });
 
-      if (modifiedCount > 0 || favColorsUpdated) {
+      if (modifiedCount > 0 || removedDuplicatesCount > 0 || favColorsUpdated) {
         saveMovies(finalMovies);
         syncInitialDataFile(finalFolders, finalMovies, finalFavs);
       }
@@ -434,6 +513,34 @@ export default function App() {
     const currentMovies = movies.length > 0 ? movies : loadMovies();
     const currentFavs = favoriteLists.length > 0 ? favoriteLists : loadFavoriteLists();
     exportFullAppData(currentFolders, currentMovies, currentFavs, hiddenFavoriteSections, targetChunkIndex);
+  };
+
+  // 1. Export Favorites Independently (fav.json)
+  const handleExportFavorites = () => {
+    const currentMovies = movies.length > 0 ? movies : loadMovies();
+    const currentFavs = favoriteLists.length > 0 ? favoriteLists : loadFavoriteLists();
+    exportFavoritesData(currentMovies, currentFavs, hiddenFavoriteSections);
+  };
+
+  // 2. Export Sections Data (initialData.json)
+  const handleExportSections = () => {
+    const currentFolders = folders.length > 0 ? folders : loadFolders();
+    const currentMovies = movies.length > 0 ? movies : loadMovies();
+    exportSectionsData(currentFolders, currentMovies);
+  };
+
+  // 3. Restore Favorites Independently from (fav.json)
+  const handleRestoreFavorites = async () => {
+    const currentMovies = movies.length > 0 ? movies : loadMovies();
+    const currentFolders = folders.length > 0 ? folders : loadFolders();
+    const res = await restoreFavoritesFromFavJson(currentMovies, currentFolders);
+    if (res) {
+      setMovies(res.updatedMovies);
+      setFavoriteLists(res.updatedFavLists);
+      if (res.hiddenSections) {
+        setHiddenFavoriteSections(res.hiddenSections);
+      }
+    }
   };
 
   // Copy movie item to a specific repository (List 1 fav, List 2 fav, XX-fav, etc.)
@@ -1226,6 +1333,9 @@ export default function App() {
           }}
           onOpenJsonImportModal={() => setIsJsonImportModalOpen(true)}
           onExportData={handleExportFullAppData}
+          onExportSections={handleExportSections}
+          onExportFavorites={handleExportFavorites}
+          onRestoreFavorites={handleRestoreFavorites}
           onOpenKotlinModal={() => setIsKotlinModalOpen(true)}
           onResetData={handleResetData}
           hiddenFoldersCount={hiddenFoldersCount}
@@ -1242,6 +1352,8 @@ export default function App() {
           hiddenFavoriteSections={hiddenFavoriteSections}
           onToggleHideFavoriteSection={handleToggleHideFavoriteSection}
           onDeduplicateMovies={handleDeduplicateMovies}
+          onOpenCinemaScreen={() => setIsCinemaScreenOpen(true)}
+          playlistCount={cinemaPlaylist.length}
         />
 
         {/* Main Section: Movie Items Grid */}
@@ -1254,6 +1366,7 @@ export default function App() {
             movies={movies}
             onOpenMovie={handleOpenMovie}
             onOpenMovieWithProxy={handleOpenMovie}
+            onExtractStreams={handleOpenExtractor}
             onToggleFavorite={handleToggleFavorite}
             onBulkAddToFavorite={handleBulkAddToFavorite}
             onToggleBroken={handleToggleBroken}
@@ -1336,6 +1449,8 @@ export default function App() {
           hiddenFavoriteSections={hiddenFavoriteSections}
           onToggleHideFavoriteSection={handleToggleHideFavoriteSection}
           onReorderFavoriteMovie={handleReorderFavoriteMovie}
+          onExportFavorites={handleExportFavorites}
+          onRestoreFavorites={handleRestoreFavorites}
         />
 
         <FolderModal
@@ -1385,6 +1500,28 @@ export default function App() {
         <KotlinCodeModal
           isOpen={isKotlinModalOpen}
           onClose={() => setIsKotlinModalOpen(false)}
+        />
+
+        {/* Stream Extractor Modal */}
+        <StreamExtractorModal
+          isOpen={isStreamExtractorOpen}
+          onClose={() => setIsStreamExtractorOpen(false)}
+          movie={movieForExtractor}
+          initialUrl={urlForExtractor}
+          onAddToPlaylist={handleAddToCinemaPlaylist}
+          onPlayNow={handlePlayNowOnScreen}
+          currentPlaylist={cinemaPlaylist}
+          onOpenCinemaScreen={() => setIsCinemaScreenOpen(true)}
+        />
+
+        {/* Cinema Screen (شاشة العرض السينمائية) */}
+        <CinemaScreen
+          isOpen={isCinemaScreenOpen}
+          onClose={() => setIsCinemaScreenOpen(false)}
+          playlist={cinemaPlaylist}
+          onUpdatePlaylist={handleUpdateCinemaPlaylist}
+          onOpenExtractor={(url) => handleOpenExtractor(url)}
+          initialActiveIndex={activeCinemaIndex}
         />
 
         {/* Floating Page Up / Down & Top / Bottom Scroll Controls */}

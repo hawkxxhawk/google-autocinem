@@ -60,6 +60,11 @@ interface NavbarProps {
   hiddenFavoriteSections?: FavoriteColor[];
   onToggleHideFavoriteSection?: (sectionId: FavoriteColor) => void;
   onDeduplicateMovies?: (deletedMovieIds: string[]) => void;
+  onExportSections?: () => void;
+  onExportFavorites?: () => void;
+  onRestoreFavorites?: () => void;
+  onOpenCinemaScreen?: () => void;
+  playlistCount?: number;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -89,6 +94,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   hiddenFavoriteSections = [],
   onToggleHideFavoriteSection,
   onDeduplicateMovies,
+  onExportSections,
+  onExportFavorites,
+  onRestoreFavorites,
+  onOpenCinemaScreen,
+  playlistCount,
 }) => {
   const [isMenuCollapsed, setIsMenuCollapsed] = useState(() => {
     const saved = localStorage.getItem('autocinema_menu_collapsed');
@@ -200,6 +210,24 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             {/* Persistent Quick Action Bar */}
             <div className="flex items-center space-x-2.5 space-x-reverse flex-shrink-0">
+              {/* Cinema Screen (شاشة العرض) Button */}
+              {onOpenCinemaScreen && (
+                <button
+                  id="btn-open-cinema-screen"
+                  onClick={onOpenCinemaScreen}
+                  title="فتح شاشة العرض السينمائية التلقائية وقائمة التشغيل"
+                  className="flex items-center space-x-2 space-x-reverse px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 active:from-indigo-700 active:to-purple-700 text-white text-base sm:text-lg font-black transition-all shadow-md shadow-indigo-600/30 border border-indigo-400/50 whitespace-nowrap cursor-pointer active:scale-95 tracking-wide ring-2 ring-indigo-500/40"
+                >
+                  <Tv className="w-5 h-5 text-amber-300 stroke-[2.5] animate-pulse" />
+                  <span>شاشة العرض</span>
+                  {playlistCount !== undefined && playlistCount > 0 && (
+                    <span className="w-5 h-5 rounded-full bg-amber-400 text-slate-950 font-black text-xs flex items-center justify-center mr-1 shadow-sm">
+                      {playlistCount}
+                    </span>
+                  )}
+                </button>
+              )}
+
               {/* Main Settings Menu Button (قائمة الإعدادات) */}
               <button
                 id="btn-open-settings"
@@ -479,6 +507,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         onOpenMovieModal={onOpenMovieModal}
         onOpenJsonImportModal={onOpenJsonImportModal}
         onExportData={onExportData}
+        onExportSections={onExportSections}
+        onExportFavorites={onExportFavorites}
+        onRestoreFavorites={onRestoreFavorites}
         onOpenKotlinModal={onOpenKotlinModal}
         onResetData={onResetData}
         onRandomFolder={onRandomFolder}

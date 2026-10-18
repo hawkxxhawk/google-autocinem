@@ -28,14 +28,11 @@ async function startServer() {
     res.json({ status: 'ok' });
   });
 
-  // Candidate Gemini models to cascade through in case of 503 / high demand spikes
+  // Candidate Gemini models (prioritizing high-availability flash models for text & narrative generation)
   const CANDIDATE_MODELS = [
-    'gemini-flash-lite-latest',
-    'gemini-3.5-flash-lite',
-    'gemini-3.6-flash',
     'gemini-flash-latest',
-    'gemini-3.7-flash',
     'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
   ];
 
   function normalizeRating(val: any): 'green' | 'yellow' | 'orange' | 'red' | 'purple' {
@@ -50,13 +47,18 @@ async function startServer() {
 
   function fallbackClassifyMovie(movie: { id: string; title: string; category?: string; description?: string }) {
     const text = `${movie.title} ${movie.category || ''} ${movie.description || ''}`.toLowerCase();
-    const baseStory = movie.description?.trim() || `فيلم "${movie.title}" - عمل سينمائي من تصنيف ${movie.category || 'عام'}.`;
+    const cleanDesc = (movie.description || '')
+      .replace(/Imported\s*via\s*JSON\s*feed/gi, '')
+      .replace(/Imported\s*via\s*JSON/gi, '')
+      .replace(/مستورد\s*عبر\s*تغذية\s*JSON\s*(\([^)]*\))?/gi, '')
+      .trim();
+    const baseStory = cleanDesc || `فيلم "${movie.title}" - عمل سينمائي من تصنيف ${movie.category || 'عام'}.`;
 
     if (/erotic|porn|xxx|sex|إباحي|إيروتيك|للكبار فقط|\+18|18\+|nc-17/.test(text)) {
       return {
         id: String(movie.id),
         classification: 'purple' as const,
-        reason: 'تم التقييم التلقائي: يحتوي على مؤشرات محتوى بالغ الجرأة وللكبار فقط.',
+        reason: 'تقييم فوري: مؤشرات محتوى بالغ الجرأة وللكبار فقط.',
         storySummary: baseStory,
       };
     }
@@ -64,7 +66,7 @@ async function startServer() {
       return {
         id: String(movie.id),
         classification: 'red' as const,
-        reason: 'تم التقييم التلقائي: يتضمن مشاهد جسدية جريئة أو إيحاءات حميمية واضحة.',
+        reason: 'تقييم فوري: يتضمن مشاهد جسدية جريئة أو إيحاءات حميمية واضحة.',
         storySummary: baseStory,
       };
     }
@@ -72,7 +74,7 @@ async function startServer() {
       return {
         id: String(movie.id),
         classification: 'orange' as const,
-        reason: 'تم التقييم التلقائي: محتوى درامي أو رومانسي معتدل.',
+        reason: 'تقييم فوري: محتوى درامي أو رومانسي معتدل.',
         storySummary: baseStory,
       };
     }
@@ -80,17 +82,123 @@ async function startServer() {
       return {
         id: String(movie.id),
         classification: 'yellow' as const,
-        reason: 'تم التقييم التلقائي: تصنيف عام خفيف أو حركة وإثارة معتادة.',
+        reason: 'تقييم فوري: تصنيف عام خفيف أو حركة وإثارة معتادة.',
         storySummary: baseStory,
       };
     }
     return {
       id: String(movie.id),
       classification: 'green' as const,
-      reason: 'تم التقييم التلقائي: محتوى عائلي أو عام نظيف خالٍ من المشاهد الجريئة.',
+      reason: 'تقييم فوري: محتوى عائلي أو عام نظيف خالٍ من المشاهد الجريئة.',
       storySummary: baseStory,
     };
   }
+
+  // System instruction for direct, clear storytelling (No brevity, no rhetorical filler words)
+  const STORY_SYSTEM_INSTRUCTION = `أنت راوٍ سينمائي دقيق، وموضوعي، ومباشر.
+مهمتك: كتابة قصة الفيلم بوضوح تام، مع الالتزام الحرفي بالقواعد الصارمة التالية:
+1. الوضوح التام والمباشر:
+   - ابدأ فوراً بسرد وقائع القصة الحقيقية.
+   - وضّح بدقة: من هو بطل الفيلم؟ أين يعيش أو ما هو عمله؟ ما الحدث المفصلي أو الأزمة التي تقع في بداية الأحداث وتغير مجرى حياته؟ ما الصراع الرئيسي والتحديات الحقيقية التي يواجهها الأبطال؟ وكيف تتوالى الأحداث؟
+2. بدون اختصار مخل:
+   - اعرض القصة بتفصيل وافٍ وواضح يمنح القارئ فهماً شاملاً لحبكة الفيلم ومساره الدرامي دون اختصار متعجل في سطرين.
+   - اكتب سرداً مترابطاً ومكتملاً للقصة والأحداث، مع تجنب حرق النهاية أو كشف الحل النهائي للغز.
+3. منع الكلمات الإنشائية والعبارات البلاغية منعاً باتاً وقطعياً:
+   - يُمنع منعاً باتاً استخدام أي عبارات ترويجية أو ديباجات إنشائية مستهلكة مثل:
+     * "في إطار درامي مشوق ومثير..."
+     * "في قالب مليء بالإثارة والغموض..."
+     * "تأخذنا هذه التحفة السينمائية في رحلة لا تُنسى..."
+     * "تدور الأحداث في مزيج ساحر..."
+     * "يحبس الأنفاس..."
+     * "يسلط الضوء على صراع إنساني عميق..."
+     * "تتشابك الخيوط الدرامية بطريقة مذهلة..."
+     * "عمل سينمائي مميز يعكس..."
+   - لا تبدأ بأي تمهيد أو جمل إنشائية؛ ادخل فوراً في صلب القصة بأسلوب سردي نقي ومباشر يركز فقط على الشخصيات والوقائع.`;
+
+  // Dedicated API endpoint: Generate clear, detailed movie story with Gemini (No brevity, zero rhetorical filler)
+  app.post('/api/ai/generate-story', async (req, res) => {
+    try {
+      const { movie } = req.body;
+      if (!movie || !movie.title) {
+        return res.status(400).json({ error: 'بيانات الفيلم وعنوانه مطلوبة.' });
+      }
+
+      const cleanTitle = String(movie.title)
+        .replace(/\b(19\d\d|20\d\d)\b/g, '')
+        .replace(/\[.*?\]|\(.*?\)/g, '')
+        .trim() || movie.title;
+
+      let generatedStory = '';
+      let generatedRating: any = movie.classification || 'yellow';
+      let generatedReason = movie.classificationReason || '';
+
+      if (process.env.GEMINI_API_KEY) {
+        const prompt = `اكتب قصة فيلم "${cleanTitle}" بوضوح تام وبدون اختصار، وبدون أي كلمات أو ديباجات إنشائية:
+- تصنيف الفيلم: ${movie.category || 'عام'}
+- بيانات مسبقة إن وُجدت: ${(movie.description || '').slice(0, 300) || 'لا يوجد'}
+
+الشروط الإلزامية:
+1. قصة الفيلم بوضوح تام وبسرد مباشر للأحداث والشخصيات والصراع الأساسي.
+2. بدون اختصار مخل: سرد مفصل ومفهوم يوضح الحبكة دون حرق النهاية.
+3. بدون أي كلمات أو عبارات إنشائية نهائياً.
+
+أعد كائن JSON فقط بالصيغة:
+{
+  "story": "سرد قصة الفيلم بوضوح وتفصيل وافٍ دون اختصار ودون كلمات إنشائية",
+  "classification": "green|yellow|orange|red|purple",
+  "reason": "سبب تصنيف المحتوى الحميمي بجملة موجزة"
+}`;
+
+        for (const model of CANDIDATE_MODELS) {
+          try {
+            const response = await ai.models.generateContent({
+              model,
+              contents: prompt,
+              config: {
+                systemInstruction: STORY_SYSTEM_INSTRUCTION,
+                responseMimeType: 'application/json',
+              },
+            });
+
+            const responseText = response.text?.trim() || '{}';
+            let parsed: any = {};
+            try {
+              parsed = JSON.parse(responseText);
+            } catch {
+              const match = responseText.match(/\{[\s\S]*\}/);
+              if (match) parsed = JSON.parse(match[0]);
+            }
+
+            if (parsed && parsed.story && typeof parsed.story === 'string' && parsed.story.trim().length > 20) {
+              generatedStory = parsed.story.trim();
+              if (parsed.classification) generatedRating = normalizeRating(parsed.classification);
+              if (parsed.reason) generatedReason = String(parsed.reason).trim();
+              break;
+            }
+          } catch (modelErr: any) {
+            console.warn(`[AI Story] Model ${model} failed:`, modelErr.message?.slice(0, 80));
+          }
+        }
+      }
+
+      if (!generatedStory) {
+        const fallback = fallbackClassifyMovie(movie);
+        generatedStory = fallback.storySummary;
+        generatedRating = fallback.classification;
+        generatedReason = fallback.reason;
+      }
+
+      return res.json({
+        success: true,
+        story: generatedStory,
+        classification: generatedRating,
+        reason: generatedReason,
+      });
+    } catch (err: any) {
+      console.error('[API] Generate story error:', err);
+      return res.status(500).json({ error: 'حدث خطأ أثناء توليد قصة الفيلم.' });
+    }
+  });
 
   // API endpoint for Gemini Movie Classification with automatic fallback & cascade
   app.post('/api/ai/classify-movies', async (req, res) => {
@@ -103,22 +211,24 @@ async function startServer() {
       // Limit to 60 items max per call for performance
       const moviesToProcess = movies.slice(0, 60);
 
-      // System instruction for intimacy / parental rating + detailed story summary
-      const systemInstruction = `أنت خبير ونقاد سينمائي متخصص في تصنيف الأفلام وسرد قصصها وحبكاتها الدرامية بأسلوب جذاب.
+      // System instruction for intimacy / parental rating + clear detailed story summary
+      const systemInstruction = `أنت خبير ونقاد سينمائي متخصص في تقييم محتوى الأفلام وسرد قصصها بوضوح وموضوعية تامة.
 مهمتك لكل فيلم:
-1. تقييم درجة المحتوى الجنسي والعلاقات الجسدية الحميمية والجرأة، واختيار أحد التصنيفات الخمسة التالية بدقة:
+1. تقييم درجة المحتوى الجنسي والعلاقات الجسدية الحميمية والجرأة، واختيار أحد التصنيفات الخمسة بدقة:
    - "green" (1/5 - نظيف / عائلي): خالٍ تماماً من المشاهد الجريئة أو التعري، مناسب للمشاهدة العائلية والعامة (G / PG).
    - "yellow" (2/5 - منخفض / خفيف): مشاهد رومانسية خفيفة وقبلات بريئة عادية دون أي تفاصيل حميمية جريئة (PG / mild PG-13).
    - "orange" (3/5 - متوسط): رومانسية معتدلة، قبلات حارة، إيحاءات أو مشاهد حميمية غير مفرطة (PG-13 / mild R).
    - "red" (4/5 - عالٍ / جريء): مشاهد جسدية صريحة، تعري جزئي أو كلي، جرأة جنسية واضحة وتصنيف للكبار (R / TV-MA / 18+).
    - "purple" (5/5 - عالٍ جداً / شديد الجرأة): محتوى إيروتيكي أو علاقات جسدية بالغة الجرأة، تعري مكثف أو تصنيف للكبار فقط (NC-17 / Unrated erotica).
-2. كتابة سبب التقييم (reason) بجملة عربية موجزة تشرح سبب اختيار هذه الدرجة.
-3. كتابة قصة الفيلم (storySummary) بتفصيل وافٍ وشائق بالعربية (في 3 إلى 5 جمل غنية بالتفاصيل)، توضح خلفية القصة، أبطالها، نقطة البداية، الصراع والمغامرة المحورية، دون حرق النهاية.`;
+2. كتابة سبب التقييم (reason) بجملة عربية موجزة ومباشرة تشرح سبب اختيار هذه الدرجة.
+3. كتابة قصة الفيلم (storySummary) بوضوح تام، وسرد مباشر للأحداث والشخصيات والصراع الأساسي، مع الالتزام الحاسم:
+   - بدون اختصار مخل: شرح واضح ومترابط للحبكة ومسار الأحداث دون حرق النهاية.
+   - بدون أي كلمات إنشائية نهائياً: يُمنع منعاً باتاً دمج عبارات بلاغية مثل "في إطار درامي مشوق"، "تحفة سينمائية"، "رحلة لا تُنسى"، "يحبس الأنفاس"، "قالب من الإثارة". ابدأ فوراً بسرد وقائع القصة بوضوح تام.`;
 
       const allResults: Array<{ id: string; classification: 'green' | 'yellow' | 'orange' | 'red' | 'purple'; reason: string; storySummary: string }> = [];
 
-      // Process in smaller chunks of 20 movies to keep latency low and avoid 503 / payload issues
-      const CHUNK_SIZE = 20;
+      // Process in smaller chunks of 15 movies for optimal prompt adherence and detailed stories
+      const CHUNK_SIZE = 15;
       for (let i = 0; i < moviesToProcess.length; i += CHUNK_SIZE) {
         const chunk = moviesToProcess.slice(i, i + CHUNK_SIZE).map((m: any, idx: number) => ({
           id: String(m.id),
@@ -131,10 +241,10 @@ async function startServer() {
         let chunkSuccess = false;
 
         if (process.env.GEMINI_API_KEY) {
-          const prompt = `قيم وصنف هذه الأفلام واكتب قصة مفصلة وشائقة لكل منها:
+          const prompt = `قيم وصنف هذه الأفلام واكتب قصة كل فيلم بوضوح تام ودون اختصار ودون أي كلمات إنشائية:
 ${JSON.stringify(chunk, null, 2)}
 
-أعد مصفوفة JSON فقط تحتوي على كائنات بها: { "id": "...", "classification": "green|yellow|orange|red|purple", "reason": "سبب التقييم بالعربية", "storySummary": "قصة الفيلم المفصلة والشائقة بالعربية في 3 إلى 5 جمل" }`;
+أعد مصفوفة JSON فقط تحتوي على كائنات بها: { "id": "...", "classification": "green|yellow|orange|red|purple", "reason": "سبب التقييم بالعربية بوضوح", "storySummary": "قصة الفيلم بوضوح تام وسرد مباشر للأحداث والشخصيات دون اختصار مخل ودون أي كلمات أو ديباجات إنشائية" }`;
 
           // Cascade through candidate models until one succeeds
           for (const model of CANDIDATE_MODELS) {
@@ -153,7 +263,6 @@ ${JSON.stringify(chunk, null, 2)}
               try {
                 parsedResults = JSON.parse(responseText);
               } catch {
-                // If wrapped in markdown codeblock, extract json
                 const match = responseText.match(/\[[\s\S]*\]/);
                 if (match) parsedResults = JSON.parse(match[0]);
               }
@@ -182,7 +291,6 @@ ${JSON.stringify(chunk, null, 2)}
               }
             } catch (modelErr: any) {
               console.warn(`[AI Classifier] Model ${model} failed (status: ${modelErr.status || modelErr.message?.slice(0, 80)}). Trying next candidate...`);
-              // Continue to next model in cascade
             }
           }
         }
@@ -203,7 +311,6 @@ ${JSON.stringify(chunk, null, 2)}
       });
     } catch (err: any) {
       console.error('[API] Gemini classification critical error:', err);
-      // Fallback for safety even in top-level try/catch
       const safeResults = (req.body?.movies || []).slice(0, 50).map((m: any) => fallbackClassifyMovie(m));
       return res.json({
         success: true,
@@ -386,6 +493,63 @@ ${JSON.stringify(chunk, null, 2)}
       return res.status(404).json({ error: 'initialData file not found' });
     } catch (err: any) {
       return res.status(500).json({ error: err?.message || 'Failed to read initialData' });
+    }
+  });
+
+  // Dedicated API endpoint to fetch favorites data (fav.json)
+  app.get('/api/get-fav-data', (_req, res) => {
+    try {
+      const publicDir = path.join(process.cwd(), 'public');
+      const rootDir = process.cwd();
+
+      const candidatePaths = [
+        path.join(publicDir, 'fav.json'),
+        path.join(rootDir, 'fav.json'),
+        path.join(publicDir, 'Fav.json'),
+        path.join(rootDir, 'Fav.json'),
+      ];
+
+      for (const p of candidatePaths) {
+        if (fs.existsSync(p)) {
+          const content = JSON.parse(fs.readFileSync(p, 'utf-8'));
+          return res.json(content);
+        }
+      }
+
+      return res.status(404).json({ error: 'fav.json not found' });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || 'Failed to read fav.json' });
+    }
+  });
+
+  // Dedicated API endpoint to sync/update favorites data (fav.json)
+  app.post('/api/update-fav-data', (req, res) => {
+    try {
+      const publicDir = path.join(process.cwd(), 'public');
+      const rootDir = process.cwd();
+      if (!fs.existsSync(publicDir)) {
+        fs.mkdirSync(publicDir, { recursive: true });
+      }
+
+      const favData = req.body;
+      const targetPath = path.join(publicDir, 'fav.json');
+      const rootTargetPath = path.join(rootDir, 'fav.json');
+
+      const jsonStr = JSON.stringify(favData, null, 2);
+      fs.writeFileSync(targetPath, jsonStr, 'utf-8');
+      fs.writeFileSync(rootTargetPath, jsonStr, 'utf-8');
+
+      const count =
+        favData.allFavorites?.totalFavoritesCount ||
+        favData.allFavorites?.movies?.length ||
+        favData.movieIds?.length ||
+        0;
+
+      console.log(`[API] Saved fav.json (${count} favorites) to public/fav.json`);
+      return res.json({ success: true, count, path: '/fav.json' });
+    } catch (err: any) {
+      console.error('[API] Error saving fav.json:', err);
+      return res.status(500).json({ error: err?.message || 'Failed to write fav.json' });
     }
   });
 
@@ -579,6 +743,417 @@ ${JSON.stringify(chunk, null, 2)}
     } catch (err: any) {
       console.error('[API] Error updating initialData chunks:', err);
       return res.status(500).json({ error: err?.message || 'Failed to update initialData chunks.' });
+    }
+  });
+
+  // ==========================================
+  // Video Stream Extractor & Cinema Screen API
+  // ==========================================
+  function vtgDecodeUrl(v: string): string {
+    if (!v || typeof v !== 'string' || !v.startsWith('v1:')) return v;
+    try {
+      const b = Buffer.from(v.slice(3), 'base64').toString('binary');
+      const k = 'vTg2026#kx';
+      let o = '';
+      for (let i = 0; i < b.length; i++) {
+        o += String.fromCharCode(b.charCodeAt(i) ^ k.charCodeAt(i % k.length));
+      }
+      return decodeURIComponent(escape(o));
+    } catch {
+      return v;
+    }
+  }
+
+  function detectQuality(str: string): string {
+    if (/4k|2160p/i.test(str)) return '4K Ultra HD';
+    if (/1080p|fhd/i.test(str)) return '1080p FHD';
+    if (/720p|hd/i.test(str)) return '720p HD';
+    if (/480p|sd/i.test(str)) return '480p SD';
+    if (/360p/i.test(str)) return '360p';
+    if (/cam|camrip/i.test(str)) return 'CAMRip';
+    return 'HD عالية';
+  }
+
+  function detectStreamType(url: string): 'hls' | 'mp4' | 'embed' {
+    if (/\.m3u8($|\?)/i.test(url)) return 'hls';
+    if (/\.mp4($|\?)/i.test(url)) return 'mp4';
+    return 'embed';
+  }
+
+  async function quickResolveStream(embedUrl: string): Promise<{ directUrl: string; type: 'hls' | 'mp4' } | null> {
+    try {
+      if (/\.(m3u8|mp4)($|\?)/i.test(embedUrl)) {
+        return { directUrl: embedUrl, type: embedUrl.includes('.m3u8') ? 'hls' : 'mp4' };
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4500);
+      const res = await fetch(embedUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': embedUrl,
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const text = await res.text();
+
+      let videoMatch = text.match(/https?:\/\/[^\s"']+\.(?:m3u8|mp4)[^\s"']*/i);
+
+      if (!videoMatch) {
+        const pMatch = text.match(/eval\(function\(p,a,c,k,e,d\)[\s\S]*?\.split\('\|'\)\)\)/);
+        if (pMatch) {
+          try {
+            const unpacked = eval('(' + pMatch[0].replace('eval(', '(') + ')');
+            videoMatch = unpacked.match(/https?:\/\/[^\s"']+\.(?:m3u8|mp4)[^\s"']*/i);
+          } catch {}
+        }
+      }
+
+      if (videoMatch) {
+        const directUrl = videoMatch[0];
+        return {
+          directUrl,
+          type: directUrl.includes('.m3u8') ? 'hls' : 'mp4',
+        };
+      }
+    } catch {}
+    return null;
+  }
+
+  // API to extract streaming links and qualities from a movie page URL
+  app.post('/api/extract-video', async (req, res) => {
+    try {
+      const { url, title } = req.body;
+      if (!url || typeof url !== 'string') {
+        return res.status(400).json({ error: 'الرجاء إدخال رابط الفيلم أو الصفحة.' });
+      }
+
+      const cleanUrl = url.trim();
+      const fetchUrl = cleanUrl.split('#')[0]; // strip hash for fetching
+
+      console.log(`[Video Extractor] Fetching page: ${cleanUrl}`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 12000);
+
+      const response = await fetch(fetchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+          'Accept-Language': 'ar,en-US;q=0.9,en;q=0.8',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        return res.status(response.status).json({
+          error: `فشل الاتصال بصفحة الفيلم (${response.status} ${response.statusText})`,
+        });
+      }
+
+      const html = await response.text();
+
+      // Page Title extraction
+      let pageTitle = title || '';
+      if (!pageTitle) {
+        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (titleMatch) {
+          pageTitle = titleMatch[1].replace(/&#[0-9]+;/g, ' ').replace(/- (مشاهدة|افلام|ايجي بست|ماي سيما).*/i, '').trim();
+        }
+      }
+
+      // Poster extraction
+      let poster = '';
+      const posterMatch = html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
+                          html.match(/<img[^>]+class=["'][^"']*(?:poster|thumb|attachment)[^"']*["'][^>]+src=["']([^"']+)["']/i);
+      if (posterMatch) {
+        poster = posterMatch[1];
+      }
+
+      const rawStreams: Array<{
+        server: string;
+        url: string;
+        quality: string;
+        type: 'hls' | 'mp4' | 'embed';
+        directUrl?: string;
+      }> = [];
+
+      const seenUrls = new Set<string>();
+
+      // 1. Check aflam18 / VTG (Video Tabs Generator) tabs
+      const vtgTabs = [...html.matchAll(/<li[^>]*class=["'][^"']*vtg-tab[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)];
+      for (const tab of vtgTabs) {
+        const serverName = tab[1].replace(/<[^>]+>/g, '').trim() || 'سيرفر مشاهدة';
+        const dataUrlMatch = tab[1].match(/data-video-url=["']([^"']+)["']/i);
+        if (dataUrlMatch) {
+          const rawUrl = dataUrlMatch[1];
+          const decoded = vtgDecodeUrl(rawUrl);
+          if (decoded && !seenUrls.has(decoded)) {
+            seenUrls.add(decoded);
+            rawStreams.push({
+              server: serverName,
+              url: decoded,
+              quality: detectQuality(serverName + ' ' + decoded),
+              type: detectStreamType(decoded),
+            });
+          }
+        }
+      }
+
+      // Also check VTG JSON array if present
+      const vtgScriptMatch = html.match(/<script[^>]+class=["']vtg-video-urls["'][^>]*>([\s\S]*?)<\/script>/i);
+      if (vtgScriptMatch) {
+        try {
+          const vtgList = JSON.parse(vtgScriptMatch[1]);
+          if (Array.isArray(vtgList)) {
+            vtgList.forEach((rawItem: string, idx: number) => {
+              const dec = vtgDecodeUrl(rawItem);
+              if (dec && !seenUrls.has(dec)) {
+                seenUrls.add(dec);
+                rawStreams.push({
+                  server: `سيرفر بديل ${idx + 1}`,
+                  url: dec,
+                  quality: detectQuality(dec),
+                  type: detectStreamType(dec),
+                });
+              }
+            });
+          }
+        } catch {}
+      }
+
+      // 2. Check aflamicose / player-box / servers
+      const serverBtns = [...html.matchAll(/<button[^>]+class=["'][^"']*server-btn[^"']*["'][^>]*>([\s\S]*?)<\/button>/gi)];
+      for (const btn of serverBtns) {
+        const fullTag = btn[0];
+        const urlMatch = fullTag.match(/data-url=["']([^"']+)["']/i);
+        const nameMatch = fullTag.match(/data-name=["']([^"']+)["']/i) || fullTag.match(/<span>([^<]+)<\/span>/i);
+        const qualityMatch = fullTag.match(/<small>([^<]+)<\/small>/i);
+
+        if (urlMatch) {
+          const streamUrl = urlMatch[1];
+          if (streamUrl && !seenUrls.has(streamUrl)) {
+            seenUrls.add(streamUrl);
+            const serverName = (nameMatch ? nameMatch[1].trim() : 'سيرفر مشاهدة') || 'سيرفر مشاهدة';
+            const quality = qualityMatch ? qualityMatch[1].trim() : detectQuality(streamUrl);
+            rawStreams.push({
+              server: serverName,
+              url: streamUrl,
+              quality: quality || 'HD',
+              type: detectStreamType(streamUrl),
+            });
+          }
+        }
+      }
+
+      // 3. DooPlay and standard WordPress movie themes
+      const dooplayTabs = [...html.matchAll(/<li[^>]+id=["']player-option-[^"']*["'][^>]*>([\s\S]*?)<\/li>/gi)];
+      for (const li of dooplayTabs) {
+        const fullTag = li[0];
+        const titleMatch = fullTag.match(/<span[^>]*class=["']title["'][^>]*>([^<]+)<\/span>/i);
+        const serverName = titleMatch ? titleMatch[1].trim() : 'سيرفر مشاهدة';
+        const postMatch = fullTag.match(/data-post=["']([^"']+)["']/i);
+        const numeMatch = fullTag.match(/data-nume=["']([^"']+)["']/i);
+        const typeMatch = fullTag.match(/data-type=["']([^"']+)["']/i);
+
+        // If direct data-src is present
+        const srcMatch = fullTag.match(/data-src=["']([^"']+)["']/i);
+        if (srcMatch && !seenUrls.has(srcMatch[1])) {
+          seenUrls.add(srcMatch[1]);
+          rawStreams.push({
+            server: serverName,
+            url: srcMatch[1],
+            quality: detectQuality(serverName + ' ' + srcMatch[1]),
+            type: detectStreamType(srcMatch[1]),
+          });
+        }
+      }
+
+      // 4. Check all elements with data-url, data-src, data-player, data-stream, data-embed
+      const generalDataElements = [...html.matchAll(/<(?:a|button|div|li|span)[^>]+(data-(?:url|src|video-url|stream|embed|player))=["']([^"']+)["'][^>]*>([\s\S]*?)<\/(?:a|button|div|li|span)>/gi)];
+      for (const el of generalDataElements) {
+        const attrVal = el[2];
+        const decoded = vtgDecodeUrl(attrVal);
+        if (
+          decoded &&
+          !seenUrls.has(decoded) &&
+          !decoded.includes('.css') &&
+          !decoded.includes('.js') &&
+          !decoded.startsWith('#') &&
+          (decoded.startsWith('http://') || decoded.startsWith('https://') || decoded.startsWith('//'))
+        ) {
+          const finalUrl = decoded.startsWith('//') ? 'https:' + decoded : decoded;
+          seenUrls.add(finalUrl);
+          const rawText = el[3].replace(/<[^>]+>/g, '').trim();
+          const serverName = rawText && rawText.length < 35 ? rawText : 'سيرفر بث خارجي';
+          rawStreams.push({
+            server: serverName,
+            url: finalUrl,
+            quality: detectQuality(serverName + ' ' + finalUrl),
+            type: detectStreamType(finalUrl),
+          });
+        }
+      }
+
+      // 5. Check iframe embeds directly on page
+      const iframes = [...html.matchAll(/<iframe[^>]+src=["']([^"']+)["'][^>]*>/gi)];
+      for (const ifr of iframes) {
+        const src = ifr[1];
+        if (
+          src &&
+          !src.includes('google') &&
+          !src.includes('facebook') &&
+          !src.includes('analytics') &&
+          !src.includes('doubleclick') &&
+          !src.includes('twitter') &&
+          !seenUrls.has(src)
+        ) {
+          seenUrls.add(src);
+          rawStreams.push({
+            server: 'مشغل مباشر (Iframe)',
+            url: src,
+            quality: 'تلقائي',
+            type: 'embed',
+          });
+        }
+      }
+
+      // 6. Direct video or source tags
+      const videoTags = [...html.matchAll(/<(?:video|source)[^>]+src=["']([^"']+)["'][^>]*>/gi)];
+      for (const vTag of videoTags) {
+        const vSrc = vTag[1];
+        if (vSrc && !seenUrls.has(vSrc)) {
+          seenUrls.add(vSrc);
+          rawStreams.push({
+            server: 'ملف فيديو مباشر',
+            url: vSrc,
+            quality: detectQuality(vSrc),
+            type: vSrc.includes('.m3u8') ? 'hls' : 'mp4',
+            directUrl: vSrc,
+          });
+        }
+      }
+
+      // If no servers found yet, check if the input URL itself is a video or embed
+      if (rawStreams.length === 0) {
+        if (/\.(m3u8|mp4)($|\?)/i.test(cleanUrl)) {
+          rawStreams.push({
+            server: 'ملف الفيديو المباشر',
+            url: cleanUrl,
+            quality: detectQuality(cleanUrl),
+            type: cleanUrl.includes('.m3u8') ? 'hls' : 'mp4',
+            directUrl: cleanUrl,
+          });
+        } else {
+          // Check common embed patterns (e.g. /e/, /embed, /v/)
+          rawStreams.push({
+            server: 'رابط المشاهدة المكتشف',
+            url: cleanUrl,
+            quality: detectQuality(cleanUrl),
+            type: 'embed',
+          });
+        }
+      }
+
+      // Attempt parallel resolution of direct streams for each embed server (up to 6)
+      const resolvedStreams = await Promise.all(
+        rawStreams.slice(0, 10).map(async (st, index) => {
+          const streamId = `stream-${index + 1}-${Date.now()}`;
+          if (st.directUrl) {
+            return {
+              id: streamId,
+              ...st,
+            };
+          }
+
+          const resStream = await quickResolveStream(st.url);
+          if (resStream) {
+            return {
+              id: streamId,
+              ...st,
+              directUrl: resStream.directUrl,
+              type: resStream.type,
+            };
+          }
+
+          return {
+            id: streamId,
+            ...st,
+          };
+        })
+      );
+
+      console.log(`[Video Extractor] Successfully extracted ${resolvedStreams.length} stream(s) for "${pageTitle}"`);
+
+      return res.json({
+        success: true,
+        title: pageTitle,
+        poster,
+        originalUrl: cleanUrl,
+        serversCount: resolvedStreams.length,
+        streams: resolvedStreams,
+      });
+    } catch (err: any) {
+      console.error('[Video Extractor] Error:', err);
+      return res.status(500).json({
+        error: err?.message || 'حدث خطأ أثناء فحص واستخراج روابط الفيديو من الصفحة.',
+      });
+    }
+  });
+
+  // Streaming proxy endpoint for CORS restricted streams (HLS / m3u8 / mp4)
+  app.get('/api/stream-proxy', async (req, res) => {
+    try {
+      const streamUrl = req.query.url as string;
+      if (!streamUrl) {
+        return res.status(400).send('Missing stream URL');
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+
+      const response = await fetch(streamUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': streamUrl,
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Headers', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+
+      if (response.headers.get('content-type')) {
+        res.setHeader('Content-Type', response.headers.get('content-type')!);
+      }
+      if (response.headers.get('content-length')) {
+        res.setHeader('Content-Length', response.headers.get('content-length')!);
+      }
+
+      if (response.body) {
+        // @ts-ignore
+        const nodeReadable = response.body;
+        // Pipe web stream to express response
+        const reader = nodeReadable.getReader();
+        const pump = async () => {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            res.write(value);
+          }
+          res.end();
+        };
+        await pump();
+      } else {
+        res.end();
+      }
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.status(502).send(`Proxy streaming error: ${err?.message}`);
+      }
     }
   });
 

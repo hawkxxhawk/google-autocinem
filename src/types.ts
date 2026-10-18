@@ -165,3 +165,27 @@ export const ALL_FAVORITES_FOLDER: Folder = {
   isFolderHidden: false,
 };
 
+export interface ExtractedStream {
+  id: string;
+  server: string;
+  url: string;
+  directUrl?: string;
+  quality: string;
+  type: 'hls' | 'mp4' | 'embed';
+  originalUrl?: string;
+}
+
+export interface PlaylistItem {
+  id: string;
+  movieId?: string;
+  movieTitle: string;
+  posterUrl?: string;
+  originalUrl?: string;
+  category?: string;
+  selectedStream: ExtractedStream;
+  allStreams: ExtractedStream[];
+  addedAt: string;
+  duration?: string;
+}
+
+

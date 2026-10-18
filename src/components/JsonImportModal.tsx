@@ -164,8 +164,8 @@ export const JsonImportModal: React.FC<JsonImportModalProps> = ({
         }
       }
 
-      if (mergedMovies.length === 0 && mergedFolders.length === 0) {
-        setFullParseError('الملفات المحددة لا تحتوي على بيانات مجلدات أو أفلام صالحة.');
+      if (mergedMovies.length === 0 && mergedFolders.length === 0 && mergedFavLists.length === 0) {
+        setFullParseError('الملفات المحددة لا تحتوي على بيانات صالحة للأقسام أو الأفلام أو المفضلة.');
         setParsedFullData(null);
         setMultiFileSummary(null);
         return;

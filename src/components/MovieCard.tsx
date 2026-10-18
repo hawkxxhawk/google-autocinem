@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { MovieItem, ClassificationRating, FavoriteColor, FAVORITE_SECTIONS, getFavoriteSectionConfig } from '../types';
 import { getDomainFromUrl, cleanMovieTitle, getFolderTextColor } from '../utils/storage';
 import { CLASSIFICATION_OPTIONS, getClassificationInfo } from '../utils/classificationUtils';
-import { classifyMoviesWithGemini } from '../utils/aiClassification';
+import { classifyMoviesWithGemini, generateMovieStoryWithGemini } from '../utils/aiClassification';
 import {
   Star,
   AlertTriangle,
@@ -27,6 +27,9 @@ import {
   Bot,
   BookOpen,
   ArrowUpDown,
+  Radio,
+  Tv,
+  Play,
 } from 'lucide-react';
 
 interface MovieCardProps {
@@ -36,6 +39,7 @@ interface MovieCardProps {
   folderColor?: string;
   isAllFavorites?: boolean;
   onOpenMovie: (movie: MovieItem) => void;
+  onExtractStreams?: (movie: MovieItem) => void;
   onToggleFavorite: (id: string, color?: FavoriteColor | null) => void;
   onToggleBroken: (id: string) => void;
   onToggleHide: (id: string) => void;
@@ -59,6 +63,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   folderColor,
   isAllFavorites = false,
   onOpenMovie,
+  onExtractStreams,
   onToggleFavorite,
   onToggleBroken,
   onToggleHide,
@@ -78,6 +83,8 @@ export const MovieCard: React.FC<MovieCardProps> = ({
   const hoverTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [imgError, setImgError] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
+  const [isStoryGenerating, setIsStoryGenerating] = useState(false);
+  const [copiedStory, setCopiedStory] = useState(false);
   const domain = getDomainFromUrl(movie.url || movie.embedUrl);
 
   // Reset imgError if posterUrl changes due to movie edit
@@ -191,6 +198,36 @@ export const MovieCard: React.FC<MovieCardProps> = ({
     }
   };
 
+  const handleGenerateStoryWithGemini = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isStoryGenerating || !onUpdateClassification) return;
+    setIsStoryGenerating(true);
+    try {
+      const res = await generateMovieStoryWithGemini(movie);
+      if (res.success && res.story) {
+        onUpdateClassification(
+          movie.id,
+          res.classification || movie.classification || 'yellow',
+          res.reason || movie.classificationReason,
+          res.story
+        );
+      } else {
+        alert(res.error || 'تعذر استدعاء قصة الفيلم بالذكاء الاصطناعي.');
+      }
+    } catch (err: any) {
+      alert(err?.message || 'حدث خطأ أثناء طلب قصة الفيلم من Gemini.');
+    } finally {
+      setIsStoryGenerating(false);
+    }
+  };
+
+  const handleCopyStory = (e: React.MouseEvent, storyText: string) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(storyText);
+    setCopiedStory(true);
+    setTimeout(() => setCopiedStory(false), 2000);
+  };
+
   const classification = getClassificationInfo(movie.classification);
 
   const displayTitle = cleanMovieTitle(movie.title) || movie.title || 'بدون عنوان';
@@ -247,7 +284,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
           e.stopPropagation();
           onOpenMovie(movie);
         }}
-        title="اضغط لفتح وتشغيل العنصر"
+        title={`فتح "${displayTitle}" في المتصفح`}
         className="relative aspect-[1/1.16] w-full bg-slate-900 overflow-hidden cursor-pointer"
       >
         {movie.posterUrl && !imgError ? (
@@ -270,8 +307,8 @@ export const MovieCard: React.FC<MovieCardProps> = ({
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/20 to-transparent opacity-80 group-hover:opacity-60 transition-opacity" />
 
         {/* Top Badges Row */}
-        <div className="absolute top-1.5 left-1.5 right-1.5 flex items-center justify-between z-10">
-          {/* Index Badge & Quick Search Icons */}
+        <div className="absolute top-1.5 left-1.5 right-1.5 flex items-start justify-between z-10">
+          {/* Index Badge & Quick Search Icons & Extract Streams */}
           <div className="flex items-center gap-1">
             {itemIndex !== undefined && (
               <button
@@ -300,6 +337,20 @@ export const MovieCard: React.FC<MovieCardProps> = ({
               </button>
             )}
 
+            {/* Quick Extract Streams Icon Button (Icon Only - Saves Space) */}
+            <button
+              type="button"
+              id={`btn-extract-${movie.id}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onExtractStreams) onExtractStreams(movie);
+              }}
+              title="سيرفرات البث 📡"
+              className="p-1 sm:p-1.5 rounded-full bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-700 hover:from-indigo-500 hover:to-purple-500 text-white backdrop-blur-md border border-indigo-400/50 shadow-md transition-all active:scale-90 cursor-pointer ring-1 ring-indigo-400/40 hover:ring-amber-300 flex items-center justify-center flex-shrink-0"
+            >
+              <Radio className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-300 animate-pulse" />
+            </button>
+
             {/* Quick Search on Google */}
             <button
               type="button"
@@ -325,29 +376,46 @@ export const MovieCard: React.FC<MovieCardProps> = ({
             </button>
           </div>
 
-          {/* Quick Actions (Favorite & Options) */}
-          <div className="flex items-center space-x-1">
-            {/* 4-Color Favorite Button */}
+          {/* Quick Actions: Three Dots Menu at top, and Favorite Button directly underneath */}
+          <div className="flex flex-col items-center gap-1.5 z-20">
+            {/* 1. Three Dots Menu Button (Clearly visible and prominent) */}
+            <button
+              id={`btn-menu-${movie.id}`}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu(!showMenu);
+                setShowColorPicker(false);
+                setShowFavoritePicker(false);
+              }}
+              title="خيارات وتعديل الفيلم (الثلاث نقاط)"
+              className="p-1.5 rounded-full bg-slate-950/90 hover:bg-slate-800 text-white hover:text-amber-300 border border-slate-700/80 shadow-md backdrop-blur-md transition-all hover:scale-105 active:scale-95 cursor-pointer ring-1 ring-white/15"
+            >
+              <MoreVertical className="w-4 h-4" />
+            </button>
+
+            {/* 2. 4-Color Favorite Button (Directly underneath the Three Dots) */}
             {(() => {
               const isHighRating = movie.classification === 'red' || movie.classification === 'purple';
               const effectiveColor: FavoriteColor = isHighRating ? 'purple' : (movie.favoriteColor || 'yellow');
               const currentFavSection = getFavoriteSectionConfig(effectiveColor);
-              let favBtnStyle = 'bg-slate-900/80 text-slate-400 hover:text-amber-400 hover:bg-slate-800';
+              let favBtnStyle = 'bg-slate-950/90 text-slate-400 hover:text-amber-400 hover:bg-slate-800 border border-slate-700/80 shadow-md';
               if (movie.isFavorite) {
                 if (currentFavSection.id === 'green') {
-                  favBtnStyle = 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300 scale-105';
+                  favBtnStyle = 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300 scale-105 border border-emerald-400';
                 } else if (currentFavSection.id === 'purple') {
-                  favBtnStyle = 'bg-purple-600 text-white shadow-md ring-2 ring-purple-300 scale-105';
+                  favBtnStyle = 'bg-purple-600 text-white shadow-md ring-2 ring-purple-300 scale-105 border border-purple-400';
                 } else if (currentFavSection.id === 'black') {
                   favBtnStyle = 'bg-black text-amber-300 border border-slate-600 shadow-md ring-2 ring-slate-400 scale-105';
                 } else {
-                  favBtnStyle = 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-300 scale-105';
+                  favBtnStyle = 'bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-300 scale-105 border border-amber-300';
                 }
               }
 
               return (
                 <button
                   id={`btn-fav-${movie.id}`}
+                  type="button"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!movie.isFavorite && isHighRating) {
@@ -366,25 +434,12 @@ export const MovieCard: React.FC<MovieCardProps> = ({
                       ? 'إضافة مباشرة إلى مفضلة 3 بنفسجي (تصنيف عالٍ / عالٍ جدًا)'
                       : 'إضافة إلى المفضلة (اختر من 4 ألوان)'
                   }
-                  className={`p-1.5 rounded-full backdrop-blur-md transition-all cursor-pointer ${favBtnStyle}`}
+                  className={`p-1.5 rounded-full backdrop-blur-md transition-all cursor-pointer hover:scale-105 active:scale-95 ${favBtnStyle}`}
                 >
                   <Star className="w-4 h-4 fill-current" />
                 </button>
               );
             })()}
-
-            <button
-              id={`btn-menu-${movie.id}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMenu(!showMenu);
-                setShowColorPicker(false);
-                setShowFavoritePicker(false);
-              }}
-              className="p-1.5 rounded-full bg-slate-900/80 hover:bg-slate-800 text-slate-300 backdrop-blur-md transition-colors"
-            >
-              <MoreVertical className="w-4 h-4" />
-            </button>
           </div>
         </div>
 
@@ -604,6 +659,21 @@ export const MovieCard: React.FC<MovieCardProps> = ({
               <span>تعديل العنصر</span>
             </button>
 
+            {/* Extract Video Streams & Cinema Screen Option */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu(false);
+                if (onExtractStreams) onExtractStreams(movie);
+              }}
+              className="w-full text-left px-3 py-2 text-xs font-black text-indigo-300 hover:text-white bg-indigo-950/40 hover:bg-indigo-600 flex items-center space-x-2 space-x-reverse transition-all border-b border-slate-800 cursor-pointer shadow-sm"
+              title="الانتقال إلى شاشة استخراج سيرفرات البث"
+            >
+              <Radio className="w-3.5 h-3.5 text-amber-400 group-hover:text-white flex-shrink-0 animate-pulse" />
+              <span>سيرفرات البث 📡</span>
+            </button>
+
             {/* 4-Color Favorite Option */}
             <button
               onClick={(e) => {
@@ -674,7 +744,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
             <button
               onClick={handleClassifySingleWithGemini}
               disabled={isAiLoading}
-              className="w-full text-left px-3 py-1.5 text-xs font-bold text-amber-300 hover:bg-amber-950/60 flex items-center space-x-2 space-x-reverse transition-colors border-b border-slate-800/80 pb-1.5"
+              className="w-full text-left px-3 py-1.5 text-xs font-bold text-amber-300 hover:bg-amber-950/60 flex items-center space-x-2 space-x-reverse transition-colors"
             >
               {isAiLoading ? (
                 <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
@@ -682,6 +752,19 @@ export const MovieCard: React.FC<MovieCardProps> = ({
                 <Sparkles className="w-3.5 h-3.5 text-amber-400" />
               )}
               <span>{isAiLoading ? 'جاري التحليل بـ Gemini...' : 'تصنيف بذكاء جيميناي 🤖'}</span>
+            </button>
+
+            {/* View & Generate Clear Story Option with Gemini */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowMenu(false);
+                handleMouseEnterBadge();
+              }}
+              className="w-full text-left px-3 py-1.5 text-xs font-bold text-emerald-300 hover:bg-emerald-950/60 flex items-center space-x-2 space-x-reverse transition-colors border-b border-slate-800/80 pb-1.5"
+            >
+              <BookOpen className="w-3.5 h-3.5 text-emerald-400" />
+              <span>عرض قصة الفيلم بوضوح 📖</span>
             </button>
 
             {/* Direct Web Searches */}
@@ -887,60 +970,117 @@ export const MovieCard: React.FC<MovieCardProps> = ({
                   className="bg-slate-950/98 border-2 border-slate-700/90 shadow-[0_25px_60px_rgba(0,0,0,0.95)] backdrop-blur-2xl rounded-2xl p-4 text-right dir-rtl animate-in fade-in zoom-in-95 duration-150 transition-all select-text cursor-default"
                 >
                   {/* Popover Header */}
-                  <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/90">
+                  <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-800/90 gap-2">
                     <div className="flex items-center gap-2.5 min-w-0">
                       <span className="p-2 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/30 flex-shrink-0 shadow-inner">
                         <BookOpen className="w-5 h-5" />
                       </span>
                       <div className="min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-xs font-black text-amber-400">قصة فيلم:</span>
+                          <span className="text-xs font-black text-amber-400">قصة الفيلم بوضوح:</span>
                           {movie.category && (
-                            <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700/80 truncate max-w-[180px]">
+                            <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full border border-slate-700/80 truncate max-w-[150px]">
                               {movie.category}
                             </span>
                           )}
                         </div>
-                        <h4 className="text-base sm:text-lg font-black text-white truncate max-w-[320px] sm:max-w-[420px]">
+                        <h4 className="text-base sm:text-lg font-black text-white truncate max-w-[280px] sm:max-w-[380px]">
                           {displayTitle}
                         </h4>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setIsRatingHovered(false)}
-                      className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer flex-shrink-0"
-                      title="إغلاق"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {(movie.storySummary || cleanDescription) && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleCopyStory(e, (movie.storySummary || cleanDescription).trim())}
+                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-colors cursor-pointer border border-slate-700/70"
+                          title="نسخ نص قصة الفيلم"
+                        >
+                          {copiedStory ? (
+                            <>
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                              <span className="text-emerald-400">تم النسخ</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3.5 h-3.5 text-slate-300" />
+                              <span>نسخ</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setIsRatingHovered(false)}
+                        className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="إغلاق"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
-                  {/* 1. PRIMARY FOCUS: Full Detailed Movie Story (المساحة الأكبر والأولوية الكاملة لقصة الفيلم) */}
-                  <div className="mb-2">
+                  {/* 1. PRIMARY FOCUS: Full Clear Movie Story (سرد قصة الفيلم بوضوح دون اختصار ودون عبارات إنشائية) */}
+                  <div className="mb-2.5">
+                    {/* Story sub-header with Gemini trigger button */}
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-amber-300">
+                        <Sparkles className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                        <span>سرد أحداث القصة بوضوح ودون اختصار:</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleGenerateStoryWithGemini}
+                        disabled={isStoryGenerating || isAiLoading}
+                        className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-indigo-600/90 hover:bg-indigo-600 text-white text-[11px] sm:text-xs font-black shadow transition-all cursor-pointer disabled:opacity-50 hover:scale-[1.02] active:scale-95 border border-indigo-400/40"
+                        title="عرض وتوليد قصة الفيلم بوضوح تام عبر Gemini AI بدون اختصار وبدون عبارات إنشائية"
+                      >
+                        {isStoryGenerating || isAiLoading ? (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin text-white" />
+                            <span>جاري السرد بـ Gemini...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3 h-3 text-amber-300" />
+                            <span>{movie.storySummary ? 'إعادة السرد بوضوح بـ Gemini ✨' : 'توليد القصة بـ Gemini ✨'}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
                     {(movie.storySummary || cleanDescription) ? (
-                      <div className="bg-gradient-to-br from-slate-900/95 via-slate-900 to-indigo-950/60 border border-amber-500/30 p-4 rounded-xl shadow-inner max-h-[380px] sm:max-h-[440px] overflow-y-auto custom-scrollbar">
+                      <div className="relative bg-gradient-to-br from-slate-900/95 via-slate-900 to-indigo-950/60 border border-amber-500/30 p-4 rounded-xl shadow-inner max-h-[380px] sm:max-h-[440px] overflow-y-auto custom-scrollbar">
+                        {isStoryGenerating && (
+                          <div className="absolute inset-0 bg-slate-950/85 backdrop-blur-sm rounded-xl flex flex-col items-center justify-center gap-2 z-10 p-4 text-center">
+                            <Loader2 className="w-6 h-6 animate-spin text-amber-400" />
+                            <p className="text-xs sm:text-sm font-bold text-amber-200">
+                              جاري كتابة قصة الفيلم بوضوح تام وبدون اختصار عبر ذكاء Gemini AI...
+                            </p>
+                          </div>
+                        )}
                         <p className="text-sm sm:text-[15.5px] text-slate-100 leading-relaxed font-normal whitespace-pre-line tracking-wide selection:bg-amber-500/30">
                           {(movie.storySummary || cleanDescription).trim()}
                         </p>
                       </div>
                     ) : (
-                      <div className="bg-slate-900/80 border border-dashed border-slate-700/80 p-5 rounded-xl text-center">
+                      <div className="bg-slate-900/80 border border-dashed border-slate-700/80 p-6 rounded-xl text-center">
                         <p className="text-sm text-slate-300 font-medium mb-3">
-                          لم يتم تلخيص قصة هذا الفيلم بعد.
+                          لم يتم تسجيل قصة هذا الفيلم بعد.
                         </p>
                         <button
                           type="button"
-                          onClick={handleClassifySingleWithGemini}
-                          disabled={isAiLoading}
-                          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-black transition-all cursor-pointer shadow-md disabled:opacity-50"
+                          onClick={handleGenerateStoryWithGemini}
+                          disabled={isStoryGenerating || isAiLoading}
+                          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-black transition-all cursor-pointer shadow-md disabled:opacity-50"
                         >
-                          {isAiLoading ? (
+                          {isStoryGenerating || isAiLoading ? (
                             <Loader2 className="w-4 h-4 animate-spin" />
                           ) : (
                             <Sparkles className="w-4 h-4 text-amber-300" />
                           )}
-                          <span>توليد قصة الفيلم بـ Gemini AI</span>
+                          <span>عرض وتوليد قصة الفيلم بوضوح بـ Gemini AI</span>
                         </button>
                       </div>
                     )}
@@ -1013,7 +1153,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
                 e.stopPropagation();
                 onOpenMovie(movie);
               }}
-              title="اضغط لفتح وتشغيل العنصر"
+              title={`فتح "${displayTitle}" في المتصفح`}
               className="text-lg sm:text-xl font-black text-white hover:text-indigo-300 group-hover:text-indigo-300 transition-colors line-clamp-2 leading-snug tracking-wide cursor-pointer flex-1"
             >
               {displayTitle}

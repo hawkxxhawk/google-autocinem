@@ -13,17 +13,28 @@ export interface AIClassificationResponse {
   error?: string;
 }
 
+function cleanStoryText(desc?: string): string {
+  if (!desc) return '';
+  return desc
+    .replace(/Imported\s*via\s*JSON\s*feed/gi, '')
+    .replace(/Imported\s*via\s*JSON/gi, '')
+    .replace(/مستورد\s*عبر\s*تغذية\s*JSON\s*(\([^)]*\))?/gi, '')
+    .replace(/\(\s*movie\s*\)/gi, '')
+    .trim();
+}
+
 function fallbackClassifyLocal(
   movie: Pick<MovieItem, 'id' | 'title' | 'category' | 'description'>
 ): AIClassificationResult {
   const text = `${movie.title} ${movie.category || ''} ${movie.description || ''}`.toLowerCase();
-  const baseStory = movie.description?.trim() || `فيلم "${movie.title}" - عمل سينمائي من تصنيف ${movie.category || 'عام'}.`;
+  const cleanDesc = cleanStoryText(movie.description);
+  const baseStory = cleanDesc || `فيلم "${movie.title}" - عمل سينمائي من تصنيف ${movie.category || 'عام'}.`;
 
   if (/erotic|porn|xxx|sex|إباحي|إيروتيك|للكبار فقط|\+18|18\+|nc-17/.test(text)) {
     return {
       id: String(movie.id),
       classification: 'purple',
-      reason: 'تقييم فوري ذكي: يحتوي على مؤشرات محتوى بالغ الجرأة وموجه للكبار فقط.',
+      reason: 'تقييم فوري: مؤشرات محتوى بالغ الجرأة وموجه للكبار فقط.',
       storySummary: baseStory,
     };
   }
@@ -31,7 +42,7 @@ function fallbackClassifyLocal(
     return {
       id: String(movie.id),
       classification: 'red',
-      reason: 'تقييم فوري ذكي: يتضمن مشاهد جسدية جريئة أو إيحاءات حميمية واضحة.',
+      reason: 'تقييم فوري: يتضمن مشاهد جسدية جريئة أو إيحاءات حميمية واضحة.',
       storySummary: baseStory,
     };
   }
@@ -39,7 +50,7 @@ function fallbackClassifyLocal(
     return {
       id: String(movie.id),
       classification: 'orange',
-      reason: 'تقييم فوري ذكي: محتوى درامي أو رومانسي معتدل.',
+      reason: 'تقييم فوري: محتوى درامي أو رومانسي معتدل.',
       storySummary: baseStory,
     };
   }
@@ -47,16 +58,77 @@ function fallbackClassifyLocal(
     return {
       id: String(movie.id),
       classification: 'yellow',
-      reason: 'تقييم فوري ذكي: تصنيف عام خفيف أو حركة وإثارة معتادة.',
+      reason: 'تقييم فوري: تصنيف عام خفيف أو حركة وإثارة معتادة.',
       storySummary: baseStory,
     };
   }
   return {
     id: String(movie.id),
     classification: 'green',
-    reason: 'تقييم فوري ذكي: محتوى عائلي أو عام نظيف خالٍ من المشاهد الجريئة.',
+    reason: 'تقييم فوري: محتوى عائلي أو عام نظيف خالٍ من المشاهد الجريئة.',
     storySummary: baseStory,
   };
+}
+
+/**
+ * Generates a clear, detailed movie story without brevity or rhetorical filler using Gemini AI
+ */
+export async function generateMovieStoryWithGemini(
+  movie: Pick<MovieItem, 'id' | 'title' | 'category' | 'description'>
+): Promise<{
+  success: boolean;
+  story: string;
+  classification?: ClassificationRating;
+  reason?: string;
+  error?: string;
+}> {
+  if (!movie || !movie.title) {
+    return { success: false, story: '', error: 'بيانات الفيلم غير صالحة.' };
+  }
+
+  try {
+    const response = await fetch('/api/ai/generate-story', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        movie: {
+          id: movie.id,
+          title: movie.title,
+          category: movie.category || '',
+          description: movie.description || '',
+        },
+      }),
+    });
+
+    const data = await response.json();
+    if (response.ok && data.success && data.story) {
+      return {
+        success: true,
+        story: data.story,
+        classification: data.classification,
+        reason: data.reason,
+      };
+    }
+
+    const fallback = fallbackClassifyLocal(movie);
+    return {
+      success: true,
+      story: fallback.storySummary || `فيلم "${movie.title}"`,
+      classification: fallback.classification,
+      reason: fallback.reason,
+    };
+  } catch (err: any) {
+    console.warn('Network issue calling generate-story, using local fallback:', err);
+    const fallback = fallbackClassifyLocal(movie);
+    return {
+      success: true,
+      story: fallback.storySummary || `فيلم "${movie.title}"`,
+      classification: fallback.classification,
+      reason: fallback.reason,
+    };
+  }
 }
 
 /**
