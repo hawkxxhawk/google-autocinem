@@ -3,14 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Remix: AutoCinema</title>
-    <meta name="description" content="Smart Cinema Directory & Organizer with folder management, movie catalogs, and randomized startup selection." />
-    <meta property="og:title" content="Remix: AutoCinema" />
-    <meta property="og:description" content="Smart Cinema Directory & Organizer with folder management, movie catalogs, and randomized startup selection." />
+    <title>final-R-H-AutoCinema</title>
+    <meta name="description" content="Smart Cinema Directory & Organizer with folder management, movie catalogs, all-repositories default view, and green repository startup." />
+    <meta property="og:title" content="final-R-H-AutoCinema" />
+    <meta property="og:description" content="Smart Cinema Directory & Organizer with folder management, movie catalogs, all-repositories default view, and green repository startup." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
+    <script>
+      // Safe alert and modal guard for sandboxed iframe compatibility
+      if (typeof window !== 'undefined') {
+        try {
+          const _origAlert = window.alert;
+          window.alert = function(msg) {
+            console.info('[AutoCinema Alert]:', msg);
+            try {
+              if (_origAlert) _origAlert.call(window, msg);
+            } catch (_) {}
+          };
+        } catch (_) {}
+      }
+    </script>
   </head>
-  <body>
+  <body class="bg-slate-950 text-slate-100 min-h-screen selection:bg-amber-500/30 selection:text-amber-200 antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

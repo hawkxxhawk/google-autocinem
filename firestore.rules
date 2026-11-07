@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Folders / Repositories
+    match /folders/{folderId} {
+      allow read, write: if true;
+    }
+
+    // 2. Movies Catalog
+    match /movies/{movieId} {
+      allow read, write: if true;
+    }
+
+    // 3. Custom Favorite Lists
+    match /favoriteLists/{listId} {
+      allow read, write: if true;
+    }
+
+    // 4. Cinema Screen Playlist Queue
+    match /cinemaPlaylist/{playlistId} {
+      allow read, write: if true;
+    }
+
+    // 5. All Favorites Groupings (Green, Yellow, Purple, Black sections)
+    match /allFavorites/{docId} {
+      allow read, write: if true;
+    }
+
+    // 6. App Sync Metadata
+    match /syncMeta/{metaId} {
+      allow read, write: if true;
+    }
+
+    // 7. App Data & Custom Movies & Stream Preferences
+    match /appData/{docId} {
+      allow read, write: if true;
+    }
+
+    // 8. Initial connection validation probe
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // General fallback for all documents and subcollections
+    match /{document=**} {
+      allow read, write: if true;
+    }
+  }
+}

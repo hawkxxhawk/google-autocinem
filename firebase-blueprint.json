@@ -1,0 +1,271 @@
+{
+  "entities": {
+    "Folder": {
+      "title": "Folder",
+      "description": "Cinema repository or category folder",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique folder identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Folder display name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Folder description"
+        },
+        "color": {
+          "type": "string",
+          "description": "Folder theme color in hex or tailwind class"
+        },
+        "sortBy": {
+          "type": "string",
+          "description": "Sorting criteria for movies inside this folder"
+        },
+        "isFolderHidden": {
+          "type": "boolean",
+          "description": "Whether this folder is hidden in the repository list"
+        },
+        "includeInAllFavorites": {
+          "type": "boolean",
+          "description": "Whether movies from this folder appear in All Favorites"
+        },
+        "zone": {
+          "type": "string",
+          "description": "Repository zone category: green, yellow, purple, or black",
+          "enum": ["green", "yellow", "purple", "black"]
+        },
+        "orderIndex": {
+          "type": "number",
+          "description": "Sequential display order index of the folder/repository"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "Movie": {
+      "title": "Movie",
+      "description": "Movie, series, or video content entry",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique movie identifier"
+        },
+        "title": {
+          "type": "string",
+          "description": "Movie title"
+        },
+        "url": {
+          "type": "string",
+          "description": "Video stream or target webpage URL"
+        },
+        "embedUrl": {
+          "type": "string",
+          "description": "Embedded player URL"
+        },
+        "duration": {
+          "type": "string",
+          "description": "Runtime duration string"
+        },
+        "category": {
+          "type": "string",
+          "description": "Category or genre label"
+        },
+        "description": {
+          "type": "string",
+          "description": "Plot summary or details"
+        },
+        "posterUrl": {
+          "type": "string",
+          "description": "Cover art or thumbnail URL"
+        },
+        "addedAt": {
+          "type": "string",
+          "description": "Date added"
+        },
+        "parentFolderId": {
+          "type": "string",
+          "description": "ID of parent folder or repository"
+        },
+        "isFavorite": {
+          "type": "boolean",
+          "description": "Whether this movie is marked as favorite"
+        },
+        "favoriteColor": {
+          "type": "string",
+          "description": "Favorite color section (green, yellow, purple, black)"
+        },
+        "favoriteOrder": {
+          "type": "number",
+          "description": "Manual ordering index in favorite section"
+        },
+        "isHidden": {
+          "type": "boolean",
+          "description": "Whether this movie is hidden"
+        },
+        "isBroken": {
+          "type": "boolean",
+          "description": "Whether stream link is flagged as broken"
+        },
+        "classification": {
+          "type": "string",
+          "description": "Content safety classification tier"
+        },
+        "classificationReason": {
+          "type": "string",
+          "description": "Reasoning for safety classification"
+        },
+        "storySummary": {
+          "type": "string",
+          "description": "AI-generated or customized story synopsis"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp of last edit"
+        }
+      },
+      "required": ["id", "title", "parentFolderId"]
+    },
+    "FavoriteList": {
+      "title": "FavoriteList",
+      "description": "Custom user-curated favorite list",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique list identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "List name"
+        },
+        "description": {
+          "type": "string",
+          "description": "List description"
+        },
+        "color": {
+          "type": "string",
+          "description": "Hex color code"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "movieIds": {
+          "type": "string",
+          "description": "Array of movie IDs in this list"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id", "name"]
+    },
+    "CinemaPlaylist": {
+      "title": "CinemaPlaylist",
+      "description": "Display screen playlist queue document",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Playlist document ID"
+        },
+        "items": {
+          "type": "string",
+          "description": "Array of playlist video items"
+        },
+        "currentIndex": {
+          "type": "number",
+          "description": "Current playing item index"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id"]
+    },
+    "AllFavorites": {
+      "title": "AllFavorites",
+      "description": "Global favorites state and color groupings",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Document identifier"
+        },
+        "movieIds": {
+          "type": "string",
+          "description": "List of all favorite movie IDs"
+        },
+        "sections": {
+          "type": "string",
+          "description": "Colored sections map (green, yellow, purple, black)"
+        },
+        "hiddenFavoriteSections": {
+          "type": "string",
+          "description": "Array of hidden section keys"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id"]
+    },
+    "AppData": {
+      "title": "AppData",
+      "description": "Application state and custom user modifications",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Document identifier"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": ["id"]
+    }
+  },
+  "firestore": {
+    "/folders/{folderId}": {
+      "schema": "Folder",
+      "description": "Collection of cinema repositories and folders"
+    },
+    "/movies/{movieId}": {
+      "schema": "Movie",
+      "description": "Collection of individual movies and series items"
+    },
+    "/favoriteLists/{listId}": {
+      "schema": "FavoriteList",
+      "description": "Collection of custom favorite lists"
+    },
+    "/cinemaPlaylist/{playlistId}": {
+      "schema": "CinemaPlaylist",
+      "description": "Display screen player queue and playlist storage"
+    },
+    "/allFavorites/{docId}": {
+      "schema": "AllFavorites",
+      "description": "Global favorites categorization and overview"
+    },
+    "/appData/{docId}": {
+      "schema": "AppData",
+      "description": "App modifications and custom data"
+    },
+    "/syncMeta/{metaId}": {
+      "schema": "AppData",
+      "description": "Synchronization metadata"
+    }
+  }
+}
