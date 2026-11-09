@@ -22,6 +22,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // 4b. Repository Movies (Partitioned by folder/repository)
+    match /repoMovies/{docId} {
+      allow read, write: if true;
+    }
+
     // 5. All Favorites Groupings (Green, Yellow, Purple, Black sections)
     match /allFavorites/{docId} {
       allow read, write: if true;

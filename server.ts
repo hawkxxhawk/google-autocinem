@@ -17,6 +17,42 @@ try {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 } catch (_) {}
 
+process.on('uncaughtException', (err: any) => {
+  const msg = err?.message || String(err);
+  if (
+    err?.code === 'ECONNRESET' ||
+    err?.code === 'EPIPE' ||
+    err?.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+    err?.code === 'UND_ERR_ABORTED' ||
+    err?.name === 'AbortError' ||
+    msg.includes('aborted') ||
+    msg.includes('premature close') ||
+    msg.includes('socket hang up') ||
+    msg.includes('terminated')
+  ) {
+    return;
+  }
+  console.error('[Server Uncaught Exception]:', err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  const msg = reason?.message || String(reason);
+  if (
+    reason?.code === 'ECONNRESET' ||
+    reason?.code === 'EPIPE' ||
+    reason?.code === 'ERR_STREAM_PREMATURE_CLOSE' ||
+    reason?.code === 'UND_ERR_ABORTED' ||
+    reason?.name === 'AbortError' ||
+    msg.includes('aborted') ||
+    msg.includes('premature close') ||
+    msg.includes('socket hang up') ||
+    msg.includes('terminated')
+  ) {
+    return;
+  }
+  console.warn('[Server Unhandled Rejection]:', reason);
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -205,11 +241,20 @@ app.post('/api/update-initial-data', async (req: Request, res: Response) => {
 app.get('/api/get-fav-data', async (_req: Request, res: Response) => {
   try {
     const favFile = path.join(PUBLIC_DIR, 'fav.json');
-    if (fs.existsSync(favFile)) {
+    const assetFav = path.join(PUBLIC_DIR, 'assets', 'aistudio', 'fav_eab88212.json');
+    if (fs.existsSync(favFile) && fs.statSync(favFile).size > 10) {
       res.setHeader('Content-Type', 'application/json');
       return fs.createReadStream(favFile).pipe(res);
     }
-    return res.status(404).json({ error: 'fav.json not found' });
+    if (fs.existsSync(assetFav) && fs.statSync(assetFav).size > 10) {
+      try {
+        fs.copyFileSync(assetFav, favFile);
+      } catch (_) {}
+      res.setHeader('Content-Type', 'application/json');
+      return fs.createReadStream(assetFav).pipe(res);
+    }
+    res.setHeader('Content-Type', 'application/json');
+    return res.json({ fileName: 'fav.json', cinemaPlaylist: [], allFavorites: { sections: [], movieIds: [] } });
   } catch (error: any) {
     res.status(500).json({ error: 'Failed to read fav.json', message: error?.message });
   }
@@ -1955,6 +2000,28 @@ function resolvePlaymogoVideo(cleanUrl: string): { title: string; streams: any[]
   };
 }
 
+function extractYouTubeId(urlStr?: string): string | null {
+  if (!urlStr || typeof urlStr !== 'string') return null;
+  const trimmed = urlStr.trim().replace(/^['"]|['"]$/g, '');
+  const match = trimmed.match(/(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=|(?:shorts|live)\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
+  if (match) return match[1];
+  try {
+    const u = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+    if (u.hostname.includes('youtube.com')) {
+      const v = u.searchParams.get('v');
+      if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+      const parts = u.pathname.split('/').filter(Boolean);
+      const last = parts[parts.length - 1];
+      if (last && /^[a-zA-Z0-9_-]{11}$/.test(last)) return last;
+    } else if (u.hostname.includes('youtu.be')) {
+      const parts = u.pathname.split('/').filter(Boolean);
+      const first = parts[0];
+      if (first && /^[a-zA-Z0-9_-]{11}$/.test(first)) return first;
+    }
+  } catch (_) {}
+  return null;
+}
+
 // -------------------------------------------------------------
 // Stream Health & Liveness Checker API Route (/api/check-stream-health)
 // -------------------------------------------------------------
@@ -1977,6 +2044,32 @@ app.post('/api/check-stream-health', async (req: Request, res: Response) => {
       target = decodeURIComponent(target.replace('/api/player-embed?url=', '').split('&')[0]);
       if (target.startsWith('/api/stream-proxy?url=')) {
         target = decodeURIComponent(target.replace('/api/stream-proxy?url=', ''));
+      }
+    }
+
+    // Fast and accurate check for YouTube streams
+    const ytId = extractYouTubeId(target) || extractYouTubeId(directUrl) || extractYouTubeId(url);
+    if (ytId) {
+      try {
+        const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`, {
+          signal: AbortSignal.timeout(3500),
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        });
+        if (oembedRes.status === 200) {
+          return res.json({ alive: true, playableDirect: false, type: 'embed', isYouTube: true, youtubeId: ytId });
+        }
+        if (oembedRes.status === 404) {
+          return res.json({ alive: false, playableDirect: false, status: 404, type: 'embed', isYouTube: true, error: 'Deleted YouTube video' });
+        }
+        // Fallback to thumbnail check
+        const thumbRes = await fetch(`https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(2500),
+        });
+        const isThumbOk = thumbRes.status === 200;
+        return res.json({ alive: isThumbOk, playableDirect: false, status: thumbRes.status, type: 'embed', isYouTube: true, youtubeId: ytId });
+      } catch (_) {
+        return res.json({ alive: true, playableDirect: false, type: 'embed', isYouTube: true, youtubeId: ytId });
       }
     }
 
@@ -2158,6 +2251,297 @@ app.post('/api/check-stream-health', async (req: Request, res: Response) => {
       playableDirect: false,
       error: err?.message || 'timeout/connection error',
     });
+  }
+});
+
+// -------------------------------------------------------------
+// Batch Movie Links & Empty Page Checker Route (/api/check-movie-links-batch)
+// -------------------------------------------------------------
+async function checkSingleMovieItem(movie: any, checkAllLinks: boolean) {
+  const movieId = movie?.id || '';
+  const rawUrl = (movie?.url || movie?.embedUrl || movie?.originalUrl || '').trim();
+
+  // 1. Missing or empty URL
+  if (!rawUrl) {
+    return {
+      id: movieId,
+      isBroken: true,
+      reason: 'empty_url',
+      description: 'رابط الفيلم فارغ أو غير متوفر في بيانات العنصر',
+      status: 0,
+      isYouTube: false,
+    };
+  }
+
+  // 2. YouTube Detection & Health Check
+  const ytId = extractYouTubeId(rawUrl) || extractYouTubeId(movie?.embedUrl) || extractYouTubeId(movie?.originalUrl);
+  const isLikelyYouTube = ytId || /youtube\.com|youtu\.be/i.test(rawUrl);
+
+  if (isLikelyYouTube) {
+    if (!ytId) {
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'invalid_youtube_id',
+        description: 'معرّف فيديو يوتيوب غير صالح أو الرابط غير مكتمل',
+        status: 400,
+        isYouTube: true,
+      };
+    }
+
+    try {
+      // Step A: YouTube oEmbed API probe
+      const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${ytId}&format=json`, {
+        signal: AbortSignal.timeout(3800),
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      });
+
+      if (oembedRes.status === 200) {
+        return {
+          id: movieId,
+          isBroken: false,
+          isYouTube: true,
+          status: 200,
+        };
+      }
+
+      if (oembedRes.status === 404) {
+        return {
+          id: movieId,
+          isBroken: true,
+          reason: 'youtube_deleted',
+          description: 'فيديو يوتيوب محذوف أو لم يعد متوفراً (404 Not Found)',
+          status: 404,
+          isYouTube: true,
+        };
+      }
+
+      if (oembedRes.status === 401 || oembedRes.status === 403) {
+        return {
+          id: movieId,
+          isBroken: true,
+          reason: 'youtube_private_or_restricted',
+          description: 'فيديو يوتيوب خاص أو مقيد أو تم إغلاق القناة (401/403)',
+          status: oembedRes.status,
+          isYouTube: true,
+        };
+      }
+
+      // Step B: Double check thumbnail for cases like 400 on oembed
+      const thumbRes = await fetch(`https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`, {
+        method: 'HEAD',
+        signal: AbortSignal.timeout(2800),
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      });
+
+      if (thumbRes.status === 200) {
+        return {
+          id: movieId,
+          isBroken: false,
+          isYouTube: true,
+          status: 200,
+        };
+      } else if (thumbRes.status === 404) {
+        return {
+          id: movieId,
+          isBroken: true,
+          reason: 'youtube_deleted',
+          description: 'فيديو يوتيوب محذوف أو غير متاح (صورة الغلاف مفقودة 404)',
+          status: 404,
+          isYouTube: true,
+        };
+      }
+
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'youtube_unavailable',
+        description: `فيديو يوتيوب غير متاح (رمز الاستجابة: ${oembedRes.status})`,
+        status: oembedRes.status,
+        isYouTube: true,
+      };
+    } catch (_) {
+      try {
+        const thumbRes = await fetch(`https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(2500),
+        });
+        if (thumbRes.status === 200) {
+          return { id: movieId, isBroken: false, isYouTube: true, status: 200 };
+        }
+        if (thumbRes.status === 404) {
+          return {
+            id: movieId,
+            isBroken: true,
+            reason: 'youtube_deleted',
+            description: 'فيديو يوتيوب محذوف أو لم يعد متوفراً (404)',
+            status: 404,
+            isYouTube: true,
+          };
+        }
+      } catch (_) {}
+      return { id: movieId, isBroken: false, isYouTube: true };
+    }
+  }
+
+  // 3. For non-YouTube links
+  if (!checkAllLinks) {
+    return {
+      id: movieId,
+      isBroken: false,
+      isYouTube: false,
+    };
+  }
+
+  let targetUrl = rawUrl;
+  if (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://')) {
+    targetUrl = 'https://' + targetUrl;
+  }
+
+  try {
+    const parsed = new URL(targetUrl);
+    if (!parsed.hostname || !parsed.hostname.includes('.')) {
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'invalid_url',
+        description: 'رابط غير صالح أو نطاق غير صحيح',
+        status: 400,
+        isYouTube: false,
+      };
+    }
+  } catch {
+    return {
+      id: movieId,
+      isBroken: true,
+      reason: 'malformed_url',
+      description: 'صيغة الرابط غير صحيحة',
+      status: 400,
+      isYouTube: false,
+    };
+  }
+
+  try {
+    const res = await fetch(targetUrl, {
+      method: 'GET',
+      signal: AbortSignal.timeout(4500),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    });
+
+    if (res.status === 404) {
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'page_not_found',
+        description: 'الصفحة غير موجودة (404 Not Found)',
+        status: 404,
+        isYouTube: false,
+      };
+    }
+
+    if (res.status === 410) {
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'page_gone',
+        description: 'الصفحة أو المحتوى تم حذفه نهائياً (410 Gone)',
+        status: 410,
+        isYouTube: false,
+      };
+    }
+
+    if (res.status >= 500) {
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'server_error',
+        description: `خطأ في خادم الموقع المصدر (${res.status})`,
+        status: res.status,
+        isYouTube: false,
+      };
+    }
+
+    const contentType = (res.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('text/html')) {
+      const text = await res.text();
+      const stripped = text.replace(/<[^>]*>/g, '').trim();
+      if (stripped.length < 35 && !text.includes('<video') && !text.includes('<iframe')) {
+        return {
+          id: movieId,
+          isBroken: true,
+          reason: 'empty_page',
+          description: 'صفحة فارغة أو بيضاء تماماً بدون أي محتوى',
+          status: 200,
+          isYouTube: false,
+        };
+      }
+
+      const isExplicitlyDeleted =
+        /404\s*not\s*found|لم\s*يتم\s*العثور\s*على\s*الصفحة|الصفحة\s*غير\s*موجودة|file\s*was\s*deleted|video\s*was\s*deleted|تم\s*حذف\s*الملف|هذا\s*الفيديو\s*غير\s*متاح|video\s*not\s*found|file\s*not\s*found|account\s*suspended|video\s*removed|no\s*longer\s*available|تم\s*إزالة\s*المحتوى/i.test(
+          text
+        );
+
+      if (isExplicitlyDeleted) {
+        return {
+          id: movieId,
+          isBroken: true,
+          reason: 'deleted_page',
+          description: 'الصفحة تشير إلى أنه تم حذف المحتوى أو لم يعد متوفراً',
+          status: 200,
+          isYouTube: false,
+        };
+      }
+    }
+
+    return {
+      id: movieId,
+      isBroken: false,
+      isYouTube: false,
+      status: res.status,
+    };
+  } catch (fetchErr: any) {
+    const msg = (fetchErr?.message || '').toLowerCase();
+    if (msg.includes('enotfound') || msg.includes('econnrefused')) {
+      return {
+        id: movieId,
+        isBroken: true,
+        reason: 'unreachable_domain',
+        description: 'الخادم أو النطاق لم يعد موجوداً أو تم حظره',
+        status: 0,
+        isYouTube: false,
+      };
+    }
+    return {
+      id: movieId,
+      isBroken: false,
+      isYouTube: false,
+    };
+  }
+}
+
+app.post('/api/check-movie-links-batch', async (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  try {
+    const { movies, checkAllLinks } = req.body || {};
+    if (!Array.isArray(movies) || movies.length === 0) {
+      return res.json({ success: true, count: 0, results: [] });
+    }
+
+    const results = await Promise.all(
+      movies.map((m: any) => checkSingleMovieItem(m, !!checkAllLinks))
+    );
+
+    return res.json({
+      success: true,
+      count: results.length,
+      results,
+    });
+  } catch (err: any) {
+    console.error('[Batch Link Check Route Error]:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Server error during batch check' });
   }
 });
 
@@ -2907,27 +3291,6 @@ async function resolveEgybestVideo(cleanUrl: string): Promise<{ title: string; p
   }
 }
 
-function extractYouTubeId(urlStr?: string): string | null {
-  if (!urlStr || typeof urlStr !== 'string') return null;
-  const trimmed = urlStr.trim().replace(/^['"]|['"]$/g, '');
-  const match = trimmed.match(/(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=|(?:shorts|live)\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
-  if (match) return match[1];
-  try {
-    const u = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
-    if (u.hostname.includes('youtube.com')) {
-      const v = u.searchParams.get('v');
-      if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
-      const parts = u.pathname.split('/').filter(Boolean);
-      const last = parts[parts.length - 1];
-      if (last && /^[a-zA-Z0-9_-]{11}$/.test(last)) return last;
-    } else if (u.hostname.includes('youtu.be')) {
-      const parts = u.pathname.split('/').filter(Boolean);
-      const first = parts[0];
-      if (first && /^[a-zA-Z0-9_-]{11}$/.test(first)) return first;
-    }
-  } catch (_) {}
-  return null;
-}
 
 // -------------------------------------------------------------
 // Video Stream Extractor API Route (/api/extract-video)
@@ -2941,6 +3304,15 @@ app.post('/api/extract-video', async (req: Request, res: Response) => {
     }
 
     let cleanUrl = url.trim();
+    if (cleanUrl.includes('/api/stream-proxy?url=') || cleanUrl.includes('/api/embed-proxy?url=') || cleanUrl.includes('/api/player-embed?url=')) {
+      const match = cleanUrl.match(/\?url=([^&]+)/);
+      if (match) {
+        try {
+          cleanUrl = decodeURIComponent(match[1]);
+        } catch (_) {}
+      }
+    }
+    cleanUrl = cleanUrl.replace(/^https?:\/\/https?:\/\//i, 'https://').replace(/^https?:\/\/\//i, 'https://');
     if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
       cleanUrl = 'https://' + cleanUrl;
     }
@@ -3037,12 +3409,13 @@ app.post('/api/extract-video', async (req: Request, res: Response) => {
       } catch (_) {}
 
       const finalTitle = cleanDetectedTitle(detectedTitle || ytTitle || (`فيديو يوتيوب ${cleanYtId}`), cleanUrl);
+      // YouTube Stream Options: Strictly ascending quality tiers starting from 360p as requested
       addStream({
-        id: `stream-yt-embed-${cleanYtId}`,
-        server: 'يوتيوب مشغل رسمي عالي الجودة ⚡',
-        quality: 'YouTube 1080p FHD',
+        id: `stream-yt-360p-${cleanYtId}`,
+        server: 'مشغل يوتيوب 360p SD ⚡ (افتراضي)',
+        quality: '360p SD (المشغل الافتراضي)',
         type: 'embed',
-        url: `https://www.youtube.com/embed/${cleanYtId}?autoplay=1&playsinline=1&rel=0`,
+        url: `https://www.youtube.com/embed/${cleanYtId}?enablejsapi=1&playsinline=1&rel=0&vq=medium`,
         directUrl: `https://www.youtube.com/watch?v=${cleanYtId}`,
         preferred: true,
         isYouTube: true,
@@ -3050,33 +3423,44 @@ app.post('/api/extract-video', async (req: Request, res: Response) => {
         preferredMode: 'embed',
       });
       addStream({
-        id: `stream-yt-muted-${cleanYtId}`,
-        server: 'يوتيوب تشغيل فوري تلقائي (بدء صامت) ⚡',
-        quality: 'YouTube AutoPlay',
+        id: `stream-yt-480p-${cleanYtId}`,
+        server: 'مشغل يوتيوب 480p SD 🎬',
+        quality: '480p SD',
         type: 'embed',
-        url: `https://www.youtube.com/embed/${cleanYtId}?autoplay=1&mute=1&playsinline=1&rel=0`,
+        url: `https://www.youtube.com/embed/${cleanYtId}?enablejsapi=1&playsinline=1&rel=0&vq=large`,
         directUrl: `https://www.youtube.com/watch?v=${cleanYtId}`,
         isYouTube: true,
         youtubeId: cleanYtId,
         preferredMode: 'embed',
       });
       addStream({
-        id: `stream-yt-nocookie-${cleanYtId}`,
-        server: 'يوتيوب مشغل بدون كوكيز 🛡️',
-        quality: 'YouTube 720p HD',
+        id: `stream-yt-720p-${cleanYtId}`,
+        server: 'مشغل يوتيوب 720p HD ⚡',
+        quality: '720p HD',
         type: 'embed',
-        url: `https://www.youtube-nocookie.com/embed/${cleanYtId}?autoplay=1&playsinline=1&rel=0`,
+        url: `https://www.youtube.com/embed/${cleanYtId}?enablejsapi=1&playsinline=1&rel=0&vq=hd720`,
         directUrl: `https://www.youtube.com/watch?v=${cleanYtId}`,
         isYouTube: true,
         youtubeId: cleanYtId,
         preferredMode: 'embed',
       });
       addStream({
-        id: `stream-yt-oembed-${cleanYtId}`,
-        server: 'يوتيوب مشغل قياسي (oEmbed) 🎬',
-        quality: 'YouTube Standard',
+        id: `stream-yt-1080p-${cleanYtId}`,
+        server: 'مشغل يوتيوب 1080p FHD 🌟',
+        quality: '1080p FHD',
         type: 'embed',
-        url: `https://www.youtube.com/embed/${cleanYtId}?feature=oembed`,
+        url: `https://www.youtube.com/embed/${cleanYtId}?enablejsapi=1&playsinline=1&rel=0&vq=hd1080`,
+        directUrl: `https://www.youtube.com/watch?v=${cleanYtId}`,
+        isYouTube: true,
+        youtubeId: cleanYtId,
+        preferredMode: 'embed',
+      });
+      addStream({
+        id: `stream-yt-player-${cleanYtId}`,
+        server: 'مشغل يوتيوب السينمائي المعتمد 🛡️ (مع النافذة المستقلة)',
+        quality: 'YouTube Cinema Player',
+        type: 'embed',
+        url: `/api/youtube-player?v=${cleanYtId}&title=${encodeURIComponent(finalTitle)}&vq=medium&autoplay=1`,
         directUrl: `https://www.youtube.com/watch?v=${cleanYtId}`,
         isYouTube: true,
         youtubeId: cleanYtId,
@@ -3084,10 +3468,10 @@ app.post('/api/extract-video', async (req: Request, res: Response) => {
       });
       addStream({
         id: `stream-yt-direct-${cleanYtId}`,
-        server: 'فتح على موقع وتطبيق يوتيوب 🌐',
+        server: 'فتح على موقع وتطبيق يوتيوب (نافذة مستقلة) 🌐',
         quality: 'YouTube App',
         type: 'embed',
-        url: `https://www.youtube.com/embed/${cleanYtId}?playsinline=1`,
+        url: `https://www.youtube.com/watch?v=${cleanYtId}`,
         directUrl: `https://www.youtube.com/watch?v=${cleanYtId}`,
         needsPopout: true,
         isYouTube: true,
@@ -3881,13 +4265,32 @@ app.all(['/api/proxy', '/api/web-proxy'], async (req: Request, res: Response) =>
   if (urlQueryIdx !== -1) {
     targetUrl = req.originalUrl.slice(urlQueryIdx + 4).trim();
     try {
-      if (targetUrl.startsWith('http%3A') || targetUrl.startsWith('https%3A')) {
-        targetUrl = decodeURIComponent(targetUrl);
-      }
+      targetUrl = decodeURIComponent(targetUrl);
     } catch (_) {}
   }
   if (!targetUrl) {
     targetUrl = ((req.query.url as string) || (req.body && req.body.url) || '').trim();
+  }
+
+  try {
+    if (targetUrl.includes('%3A') || targetUrl.includes('%2F') || targetUrl.includes('%3F')) {
+      targetUrl = decodeURIComponent(targetUrl);
+    }
+  } catch (_) {}
+
+  // Recursively unwrap any nested proxy wrappers
+  while (targetUrl.includes('url=') && (targetUrl.includes('/api/') || targetUrl.includes('proxy'))) {
+    const m = targetUrl.match(/[?&]url=([^&]+)/i);
+    if (m && m[1]) {
+      try {
+        const decoded = decodeURIComponent(m[1]);
+        targetUrl = decoded;
+      } catch (_) {
+        break;
+      }
+    } else {
+      break;
+    }
   }
 
   if (!targetUrl) {
@@ -3980,15 +4383,28 @@ app.all(['/api/proxy', '/api/web-proxy'], async (req: Request, res: Response) =>
     });
     clearTimeout(timeoutId);
 
+    // Update origin in case of redirects
+    try {
+      if (upstreamRes.url && upstreamRes.url !== targetUrl) {
+        const redirectedUrl = new URL(upstreamRes.url);
+        if (redirectedUrl.origin) {
+          origin = redirectedUrl.origin;
+          parsedUrl = redirectedUrl;
+          targetUrl = upstreamRes.url;
+        }
+      }
+    } catch (_) {}
+
     const contentType = upstreamRes.headers.get('content-type') || '';
     const isHtml = contentType.toLowerCase().includes('text/html');
 
     // CORS & frame headers unblocking
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
     res.setHeader('Access-Control-Allow-Headers', '*');
     res.removeHeader('X-Frame-Options');
     res.removeHeader('Content-Security-Policy');
+    res.removeHeader('Strict-Transport-Security');
 
     if (upstreamRes.headers.get('accept-ranges')) {
       res.setHeader('Accept-Ranges', upstreamRes.headers.get('accept-ranges')!);
@@ -4216,6 +4632,206 @@ ${cfNoticeHtml}
 });
 
 // -------------------------------------------------------------
+// Dedicated Robust YouTube Player Route (/api/youtube-player)
+// Solves iframe embed blocks, error 150/153, and cross-origin sandbox restrictions
+// -------------------------------------------------------------
+app.get('/api/youtube-player', (req: Request, res: Response) => {
+  const v = (req.query.v as string || req.query.id as string || req.query.url as string || '').trim();
+  const ytId = extractYouTubeId(v) || (v.length === 11 ? v : null);
+  const title = (req.query.title as string) || 'مشغل يوتيوب السينمائي المعتمد';
+  const autoplay = req.query.autoplay !== '0';
+  const vqParam = ((req.query.vq as string) || (req.query.quality as string) || 'medium').trim().toLowerCase();
+  let vq = 'medium';
+  if (vqParam.includes('1080') || vqParam === 'hd1080') vq = 'hd1080';
+  else if (vqParam.includes('720') || vqParam === 'hd720') vq = 'hd720';
+  else if (vqParam.includes('480') || vqParam === 'large') vq = 'large';
+  else vq = 'medium';
+
+  const watchUrl = `https://www.youtube.com/watch?v=${ytId}`;
+  const officialEmbedUrl = `https://www.youtube.com/embed/${ytId}?autoplay=${autoplay ? 1 : 0}&enablejsapi=1&playsinline=1&rel=0&modestbranding=1&vq=${vq}`;
+
+  const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>${escapeHtml(title)}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; font-family: 'Cairo', system-ui, -apple-system, sans-serif; color: #fff; }
+    #player-wrapper { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #000; }
+    iframe, #yt-player { width: 100%; height: 100%; border: 0; outline: none; }
+    .loading-spinner { position: absolute; border: 4px solid rgba(255,255,255,0.15); border-top: 4px solid #f59e0b; border-radius: 50%; width: 48px; height: 48px; animation: spin 0.8s linear infinite; pointer-events: none; z-index: 10; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .overlay-bar { position: absolute; top: 10px; right: 10px; z-index: 35; display: flex; align-items: center; gap: 8px; opacity: 1; pointer-events: auto; }
+    .overlay-btn { background: rgba(15, 23, 42, 0.92); color: #fbbf24; border: 1.5px solid rgba(245, 158, 11, 0.6); padding: 7px 14px; border-radius: 12px; font-size: 11.5px; font-weight: 800; text-decoration: none; display: flex; align-items: center; gap: 6px; backdrop-filter: blur(12px); cursor: pointer; transition: all 0.15s; box-shadow: 0 4px 14px rgba(0,0,0,0.6); }
+    .overlay-btn:hover { background: #f59e0b; color: #020617; transform: translateY(-1px); }
+    .overlay-badge { background: rgba(220, 38, 38, 0.9); color: #fff; border: 1.5px solid rgba(239, 68, 68, 0.6); padding: 7px 12px; border-radius: 12px; font-size: 11.5px; font-weight: 900; display: flex; align-items: center; gap: 5px; backdrop-filter: blur(12px); box-shadow: 0 4px 14px rgba(0,0,0,0.6); }
+    .fallback-banner { display: none; position: absolute; inset: 0; background: rgba(2, 6, 23, 0.95); backdrop-filter: blur(14px); flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 40; }
+    .fallback-card { max-width: 480px; width: 100%; background: #0f172a; border: 1.5px solid rgba(245, 158, 11, 0.6); border-radius: 20px; padding: 28px 24px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.9); }
+    .fallback-card h3 { color: #fcd34d; font-size: 16px; margin-bottom: 10px; font-weight: 900; }
+    .fallback-card p { color: #cbd5e1; font-size: 12.5px; line-height: 1.7; margin-bottom: 20px; }
+    .action-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+    .btn-primary { background: linear-gradient(135deg, #f59e0b, #d97706); color: #020617; font-weight: 900; font-size: 13px; padding: 10px 20px; border-radius: 12px; text-decoration: none; border: 0; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 6px 20px rgba(245,158,11,0.35); }
+    .btn-primary:active { transform: scale(0.96); }
+    .btn-secondary { background: #1e293b; color: #f1f5f9; font-weight: 800; font-size: 12.5px; padding: 10px 18px; border-radius: 12px; text-decoration: none; border: 1px solid #334155; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+    .btn-secondary:hover { background: #334155; color: #fff; }
+  </style>
+</head>
+<body>
+  <div id="player-wrapper">
+    <div id="spinner" class="loading-spinner"></div>
+    <div class="overlay-bar">
+      <div class="overlay-badge">
+        <span>🎬 YouTube HD</span>
+      </div>
+      <button type="button" class="overlay-btn" onclick="openPopout()" title="فتح في نافذة سينمائية مستقلة لتجاوز أي قيود حظر">
+        <span>⚡ تشغيل نافذة مستقلة (بدون حظر) ↗</span>
+      </button>
+      <a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener noreferrer" class="overlay-btn" title="المشاهدة مباشرة في موقع وتطبيق يوتيوب">
+        <span>تطبيق YouTube ↗</span>
+      </a>
+    </div>
+
+    <!-- YouTube Player Container -->
+    <div id="yt-player"></div>
+
+    <!-- Fallback Card for restricted/Error 150 videos -->
+    <div id="fallback-banner" class="fallback-banner">
+      <div class="fallback-card">
+        <div style="font-size:32px;margin-bottom:8px;">⚠️</div>
+        <h3>تم تقييد التضمين المباشر من مالك الفيديو</h3>
+        <p>
+          قام ناشر المقطع بحظر التضمين داخل النوافذ المدمجة (Error 150/153). يمكنك مواصلة مشاهدة <strong>${escapeHtml(title)}</strong> فوراً بضغطة واحدة وبكامل الجودة:
+        </p>
+        <div class="action-row">
+          <button type="button" class="btn-primary" onclick="openPopout()">
+            <span>تشغيل في نافذة مستقلة ⚡</span>
+          </button>
+          <a href="${escapeHtml(watchUrl)}" target="_blank" rel="noopener noreferrer" class="btn-secondary">
+            <span>المشاهدة على يوتيوب ↗</span>
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var ytVideoId = ${JSON.stringify(ytId)};
+    var watchUrl = ${JSON.stringify(watchUrl)};
+    var spinner = document.getElementById('spinner');
+    var fallbackBanner = document.getElementById('fallback-banner');
+    var player = null;
+    var playerReady = false;
+
+    function hideSpinner() {
+      if (spinner) spinner.style.display = 'none';
+    }
+
+    function showFallback() {
+      hideSpinner();
+      if (fallbackBanner) fallbackBanner.style.display = 'flex';
+      try {
+        window.parent.postMessage({ type: 'autocinema:youtube-restricted', videoId: ytVideoId }, '*');
+      } catch(_) {}
+    }
+
+    function openPopout() {
+      var w = 960, h = 560;
+      var left = Math.max(0, (screen.width - w) / 2);
+      var top = Math.max(0, (screen.height - h) / 2);
+      var pop = window.open(
+        'https://www.youtube.com/embed/' + ytVideoId + '?autoplay=1&playsinline=1&rel=0',
+        'AutoCinemaYTPlayer',
+        'width=' + w + ',height=' + h + ',top=' + top + ',left=' + left + ',toolbar=no,menubar=no,location=no,status=no,resizable=yes'
+      );
+      if (pop) pop.focus();
+    }
+
+    // Direct fallback iframe loader if API takes more than 3.5s
+    var apiTimeout = setTimeout(function() {
+      if (!playerReady) {
+        var container = document.getElementById('yt-player');
+        if (container && !player) {
+          container.innerHTML = '<iframe src="' + ${JSON.stringify(officialEmbedUrl)} + '" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>';
+          hideSpinner();
+        }
+      }
+    }, 3500);
+
+    // Load YouTube Iframe API from official youtube.com
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    var firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+    window.onYouTubeIframeAPIReady = function() {
+      clearTimeout(apiTimeout);
+      try {
+        var originHost = window.location.origin || (window.location.protocol + '//' + window.location.host);
+        player = new YT.Player('yt-player', {
+          videoId: ytVideoId,
+          host: 'https://www.youtube.com',
+          playerVars: {
+            autoplay: 1,
+            playsinline: 1,
+            rel: 0,
+            modestbranding: 1,
+            enablejsapi: 1,
+            fs: 1,
+            origin: originHost,
+            widget_referrer: window.location.href
+          },
+          events: {
+            onReady: function(event) {
+              playerReady = true;
+              hideSpinner();
+              try {
+                event.target.setPlaybackQuality(${JSON.stringify(vq)});
+              } catch(_) {}
+              try {
+                event.target.playVideo();
+              } catch(_) {}
+            },
+            onStateChange: function(event) {
+              if (event.data === YT.PlayerState.PLAYING) {
+                hideSpinner();
+                try {
+                  window.parent.postMessage({ type: 'autocinema:youtube-playing', videoId: ytVideoId }, '*');
+                } catch(_) {}
+              }
+            },
+            onError: function(event) {
+              console.warn('[AutoCinema YouTube Player Error]:', event.data);
+              // Error 101, 150, 153: Video owner restricted embedding
+              // Error 100: Video removed/not found
+              if (event.data === 150 || event.data === 101 || event.data === 153 || event.data === 100) {
+                showFallback();
+              }
+            }
+          }
+        });
+      } catch(err) {
+        console.error('[YT Init Error]', err);
+        var container = document.getElementById('yt-player');
+        if (container) {
+          container.innerHTML = '<iframe src="' + ${JSON.stringify(officialEmbedUrl)} + '" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>';
+        }
+        hideSpinner();
+      }
+    };
+  </script>
+</body>
+</html>`;
+
+  res.send(html);
+});
+
+// -------------------------------------------------------------
 // Dedicated Clean Embed Player (Protected HLS Player for Iframes)
 // -------------------------------------------------------------
 app.get('/api/player-embed', (req: Request, res: Response) => {
@@ -4226,6 +4842,12 @@ app.get('/api/player-embed', (req: Request, res: Response) => {
 
   if (!urlParam) {
     return res.status(400).send('Missing url parameter');
+  }
+
+  // If this is a YouTube link, automatically redirect to dedicated robust YouTube player
+  const ytId = extractYouTubeId(urlParam);
+  if (ytId) {
+    return res.redirect(`/api/youtube-player?v=${encodeURIComponent(ytId)}&title=${encodeURIComponent(title)}&autoplay=1`);
   }
 
   // Format media URL: if not already proxied, route through stream-proxy

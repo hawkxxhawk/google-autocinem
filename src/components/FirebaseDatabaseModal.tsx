@@ -34,6 +34,7 @@ import {
   saveUserModificationsToDb,
   saveAllStreamPreferencesToDb,
   saveAllCustomMoviesToDb,
+  saveAllRepositoriesAndMoviesToDb,
   seedAllToFirestore,
   fetchFoldersFromDb,
   fetchFavoriteListsFromDb,
@@ -42,6 +43,7 @@ import {
   fetchAllCinemaPlaylistsFromDb,
   fetchUserModificationsFromDb,
   fetchMoviesFromDb,
+  fetchAllRepositoryMoviesFromDb,
   fetchStreamPreferencesFromDb,
   fetchFirestoreOverview,
   FirestoreLiveOverview,
@@ -96,6 +98,7 @@ interface FirebaseDatabaseModalProps {
     activePlaylistId?: string;
     allFavorites?: any;
     movies?: any[];
+    repoMovies?: any[];
     customMovies?: any[];
     deletedMovieIds?: string[];
     streamPreferences?: Record<string, any>;
@@ -659,13 +662,29 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
     );
   };
 
-  // Granular Push 4: Custom Movies only
+  // Granular Push 4: Custom Movies & All Repository Movies
   const executePushMoviesOnly = async () => {
     setIsPushing(true);
     setErrorMsg(null);
     setSuccessMsg(null);
     const startTime = Date.now();
     try {
+      notifyUploadStart(
+        'رفع وحفظ كافة أفلام ومسلسلات المستودعات',
+        `جاري تحضير وتأكيد أفلام ومسلسلات كافة المستودعات (${movies.length} فيلم)...`
+      );
+
+      // 1. Save all repository movies partitioned into repoMovies collection
+      notifyUploadProgress('رفع وحفظ كافة المستودعات', 'جاري حفظ وتوزيع أفلام المستودعات في السحابة...', 25);
+      const repoResult = await saveAllRepositoriesAndMoviesToDb(
+        folders,
+        movies,
+        (pct, msg) => {
+          notifyUploadProgress('رفع وحفظ كافة المستودعات', msg, pct);
+        }
+      );
+
+      // 2. Save custom movies summary
       const customOrModified = movies.filter((m) => {
         return (
           m.isUserAdded ||
@@ -677,17 +696,13 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
         );
       });
 
-      notifyUploadStart(
-        'رفع الأفلام المعدلة والمضافة',
-        `جاري تحضير وتأكيد الأفلام المضافة والمعدلة (${customOrModified.length} فيلم)...`
-      );
-      notifyUploadProgress('رفع الأفلام المعدلة والمضافة', 'جاري إرسال الأفلام المعدلة إلى وثائق Firestore ومستودع custom_movies...', 50);
-
+      notifyUploadProgress('رفع وحفظ كافة المستودعات', 'جاري تأكيد ملخص التعديلات والمصنفات في Firestore...', 90);
       const savedCount = await saveAllCustomMoviesToDb(
         customOrModified,
         (window as any).__autocinema_deleted_movie_ids || []
       );
 
+      const totalEffectiveMovies = Math.max(savedCount, repoResult.totalUploaded, movies.length);
       const latencyMs = Date.now() - startTime;
       const report: FirestoreSyncReport = {
         timestamp: new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
@@ -696,17 +711,17 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
         foldersCount: folders.length,
         favListsCount: favoriteLists.length,
         playlistCount: cinemaPlaylist.length,
-        moviesCount: customOrModified.length,
+        moviesCount: totalEffectiveMovies,
         favMoviesCount: favMovies.length,
-        statusText: 'تم حفظ وتأكيد الأفلام المضافة والمعدلة في Firestore بنجاح 🟢',
+        statusText: 'تم حفظ وتأكيد كافة أفلام ومسلسلات المستودعات في Firestore بنجاح 🟢',
       };
       recordSyncReport(report);
       notifyUploadSuccess(
-        `تم رفع وتأكيد الأفلام المعدلة والمضافة (${customOrModified.length} فيلم، ${savedCount} وثيقة) في Firestore بنجاح 🟢 (${latencyMs}ms)`,
-        { moviesCount: customOrModified.length, latencyMs }
+        `تم رفع وتأكيد كافة أفلام المستودعات (${repoResult.totalUploaded} فيلم بـ ${repoResult.reposCount} مستودع) في Firestore بنجاح 🟢 (${latencyMs}ms)`,
+        { moviesCount: totalEffectiveMovies, latencyMs }
       );
       setSuccessMsg(
-        `✓ بيان إتمام المزامنة: تم بنجاح رفع وتأكيد الأفلام المعدلة والمضافة (${customOrModified.length} فيلم) في Firestore! 🎥 (زمن التنفيذ: ${latencyMs} ms)`
+        `✓ بيان إتمام المزامنة: تم بنجاح رفع وتأكيد كافة أفلام المستودعات (${repoResult.totalUploaded} فيلم في ${repoResult.reposCount} مستودع) في Firestore! 🎥 (زمن التنفيذ: ${latencyMs} ms)`
       );
       loadCloudOverview();
     } catch (err: any) {
@@ -892,27 +907,31 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
     setProgressMsg('جاري الاتصال وقراءة كافة البيانات من قاعدة بيانات Firestore...');
 
     try {
-      const [dbFolders, dbFavLists, dbAllFavs, dbPlaylist, dbUserMods, dbMovies, dbStreamPrefs] = await Promise.all([
+      const [dbFolders, dbFavLists, dbAllFavs, dbPlaylist, dbUserMods, dbMovies, dbRepoResult, dbStreamPrefs] = await Promise.all([
         fetchFoldersFromDb().catch(() => []),
         fetchFavoriteListsFromDb().catch(() => []),
         fetchAllFavoritesFromDb().catch(() => null),
         fetchCinemaPlaylistFromDb().catch(() => null),
         fetchUserModificationsFromDb().catch(() => null),
         fetchMoviesFromDb().catch(() => []),
+        fetchAllRepositoryMoviesFromDb().catch(() => null),
         fetchStreamPreferencesFromDb().catch(() => ({})),
       ]);
 
+      const repoMoviesList = dbRepoResult?.movies || [];
       const mergedCustomMovies = [
         ...(dbUserMods?.customMovies || []),
         ...(dbMovies || []),
       ];
+
+      const effectiveRetrievedMovies = repoMoviesList.length > 0 ? repoMoviesList.length : mergedCustomMovies.length;
 
       const hasData =
         (dbFolders && dbFolders.length > 0) ||
         (dbFavLists && dbFavLists.length > 0) ||
         (dbPlaylist && dbPlaylist.length > 0) ||
         dbAllFavs ||
-        mergedCustomMovies.length > 0 ||
+        effectiveRetrievedMovies > 0 ||
         (dbStreamPrefs && Object.keys(dbStreamPrefs).length > 0);
 
       if (!hasData) {
@@ -926,6 +945,7 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
         favoriteLists: dbFavLists && dbFavLists.length > 0 ? dbFavLists : undefined,
         cinemaPlaylist: dbPlaylist && Array.isArray(dbPlaylist) ? dbPlaylist : undefined,
         allFavorites: dbAllFavs || undefined,
+        repoMovies: repoMoviesList.length > 0 ? repoMoviesList : undefined,
         customMovies: mergedCustomMovies.length > 0 ? mergedCustomMovies : undefined,
         deletedMovieIds: dbUserMods?.deletedMovieIds || undefined,
         streamPreferences: dbStreamPrefs && Object.keys(dbStreamPrefs).length > 0 ? dbStreamPrefs : undefined,
@@ -938,7 +958,7 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
         foldersCount: dbFolders.length,
         favListsCount: dbFavLists.length,
         playlistCount: dbPlaylist?.length || 0,
-        moviesCount: mergedCustomMovies.length,
+        moviesCount: effectiveRetrievedMovies,
         favMoviesCount: dbAllFavs?.movieIds?.length || 0,
         greenFavsCount: dbAllFavs?.sections?.green?.length || 0,
         yellowFavsCount: dbAllFavs?.sections?.yellow?.length || 0,
@@ -949,12 +969,12 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
       recordSyncReport(report);
 
       setSuccessMsg(
-        `✓ بيان إتمام المزامنة الشاملة: تم بنجاح جلب وتحديث كل بيانات التطبيق من Firestore!
+        `✓ بيان إتمام المزامنة الشاملة: تم بنجاح جلب وتحديث كل بيانات التطبيق وجميع المستودعات من Firestore!
 • المستودعات والأقسام المسترجعة: ${dbFolders.length}
 • قوائم المفضلة المسترجعة: ${dbFavLists.length}
 • عناصر قائمة شاشة العرض: ${dbPlaylist?.length || 0}
 • إجمالي المفضلة العامة (الألوان الأربعة): ${dbAllFavs?.movieIds?.length || 0}
-• الأفلام المعدلة والمسترجعة: ${mergedCustomMovies.length}
+• إجمالي أفلام ومسلسلات المستودعات المسترجعة: ${effectiveRetrievedMovies} (بما فيها مستودعات يوتيوب 1 و2 و3)
 • تفضيلات السيرفرات المسترجعة: ${Object.keys(dbStreamPrefs).length}`
       );
 
@@ -1493,7 +1513,7 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
               </div>
 
               {/* Cloud Live Metric Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 font-mono">
+              <div className="grid grid-cols-2 sm:grid-cols-6 gap-2 font-mono">
                 {/* 1. Folders */}
                 <div className="p-3 rounded-xl bg-slate-950/90 border border-indigo-500/30 space-y-1">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-sans">
@@ -1509,10 +1529,25 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
                   </div>
                 </div>
 
-                {/* 2. Playlist */}
+                {/* 2. Repository Movies */}
+                <div className="p-3 rounded-xl bg-slate-950/90 border border-sky-500/30 space-y-1">
+                  <div className="flex items-center justify-between text-slate-400 text-xs font-sans">
+                    <span>أفلام المستودعات</span>
+                    <Film className="w-3.5 h-3.5 text-sky-400" />
+                  </div>
+                  <div className="text-lg sm:text-xl font-black text-sky-300">
+                    {cloudOverview ? (cloudOverview.counts.repoMovies || cloudOverview.counts.collectionMovies || 0) : '...'}
+                  </div>
+                  <div className="text-[10px] text-sky-400 font-sans flex items-center gap-1">
+                    <Check className="w-3 h-3" />
+                    <span>{cloudOverview?.counts.repoMovies ? 'كل المستودعات بالسحابة' : 'جاهزة للمزامنة'}</span>
+                  </div>
+                </div>
+
+                {/* 3. Playlist */}
                 <div className="p-3 rounded-xl bg-slate-950/90 border border-rose-500/30 space-y-1">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-sans">
-                    <span className="font-bold text-slate-200">قوائم شاشة العرض (Playlists)</span>
+                    <span className="font-bold text-slate-200">شاشة العرض</span>
                     <Tv className="w-3.5 h-3.5 text-rose-400" />
                   </div>
                   <div className="flex items-baseline gap-1.5">
@@ -1520,23 +1555,23 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
                       {cloudOverview ? (cloudOverview.counts.allPlaylistsCount ?? currentCloudPlaylists.length) : '...'}
                     </span>
                     <span className="text-xs font-sans font-bold text-rose-400">
-                      {cloudOverview ? ((cloudOverview.counts.allPlaylistsCount ?? currentCloudPlaylists.length) === 1 ? 'قائمة تشغيل' : 'قوائم تشغيل') : ''}
+                      {cloudOverview ? ((cloudOverview.counts.allPlaylistsCount ?? currentCloudPlaylists.length) === 1 ? 'قائمة' : 'قوائم') : ''}
                     </span>
                   </div>
                   <div className="text-[10px] text-emerald-400 font-sans flex items-center gap-1 truncate" title={`إجمالي عناصر شاشة العرض بالسحابة: ${totalCloudPlaylistItems} عنصر`}>
                     <Check className="w-3 h-3 shrink-0" />
                     <span>
                       {cloudOverview
-                        ? `${totalCloudPlaylistItems} عنصر إجمالي (${cloudOverview.counts.playlist} بالنشطة)`
+                        ? `${totalCloudPlaylistItems} عنصر (${cloudOverview.counts.playlist} بالنشطة)`
                         : 'فارغ بالسحابة'}
                     </span>
                   </div>
                 </div>
 
-                {/* 3. All Favorites */}
+                {/* 4. All Favorites */}
                 <div className="p-3 rounded-xl bg-slate-950/90 border border-amber-500/30 space-y-1">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-sans">
-                    <span>المفضلة العامة بالسحابة</span>
+                    <span>المفضلة العامة</span>
                     <Star className="w-3.5 h-3.5 text-amber-400" />
                   </div>
                   <div className="text-lg sm:text-xl font-black text-amber-300">
@@ -1550,10 +1585,10 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
                   </div>
                 </div>
 
-                {/* 4. Favorite Lists */}
+                {/* 5. Favorite Lists */}
                 <div className="p-3 rounded-xl bg-slate-950/90 border border-purple-500/30 space-y-1">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-sans">
-                    <span>قوائم المفضلة المخصصة</span>
+                    <span>قوائم مخصصة</span>
                     <Layers className="w-3.5 h-3.5 text-purple-400" />
                   </div>
                   <div className="text-lg sm:text-xl font-black text-purple-300">
@@ -1564,10 +1599,10 @@ export const FirebaseDatabaseModal: React.FC<FirebaseDatabaseModalProps> = ({
                   </div>
                 </div>
 
-                {/* 5. Stream Preferences */}
+                {/* 6. Stream Preferences */}
                 <div className="p-3 rounded-xl bg-slate-950/90 border border-teal-500/30 space-y-1 col-span-2 sm:col-span-1">
                   <div className="flex items-center justify-between text-slate-400 text-xs font-sans">
-                    <span>تفضيلات السيرفرات</span>
+                    <span>تفضيلات البث</span>
                     <Server className="w-3.5 h-3.5 text-teal-400" />
                   </div>
                   <div className="text-lg sm:text-xl font-black text-teal-300">

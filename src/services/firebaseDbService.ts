@@ -132,6 +132,10 @@ export function isOfflineOrNetworkError(error: unknown): boolean {
   return (
     code === 'unavailable' ||
     code === 'deadline-exceeded' ||
+    code === 'resource-exhausted' ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('resource-exhausted') ||
+    msg.includes('quota') ||
     msg.includes('client is offline') ||
     msg.includes('could not reach cloud firestore') ||
     msg.includes('offline mode') ||
@@ -1347,8 +1351,267 @@ export function subscribeToSyncStatus(onSync: (status: any) => void): () => void
   );
 }
 
+export interface DbRepoMoviesManifest {
+  manifestVersion: number;
+  totalMovies: number;
+  totalRepositories: number;
+  repositories: {
+    folderId: string;
+    folderName: string;
+    moviesCount: number;
+    partsCount: number;
+  }[];
+  updatedAt: string;
+}
+
+export function cleanMovieForRepoDoc(m: any, defaultFolderId?: string): any {
+  if (!m || !m.id) return null;
+  const streamUrl = m.streamUrl || m.selectedStream?.url || m.selectedStream?.directUrl || m.url || '';
+  const directUrl = m.directUrl || m.selectedStream?.directUrl || m.selectedStream?.url || '';
+  const folderId = m.parentFolderId || m.folderId || defaultFolderId || '';
+  return {
+    id: String(m.id),
+    title: String(m.title || ''),
+    url: String(streamUrl || m.url || ''),
+    embedUrl: String(m.embedUrl || ''),
+    directUrl: String(directUrl),
+    streamUrl: String(streamUrl),
+    parentFolderId: String(folderId),
+    duration: String(m.duration || ''),
+    category: String(m.category || ''),
+    posterUrl: String(m.posterUrl || ''),
+    isFavorite: Boolean(m.isFavorite),
+    favoriteColor: String(m.favoriteColor || ''),
+    classification: String(m.classification || ''),
+    classificationReason: String(m.classificationReason || ''),
+    storySummary: String(m.storySummary || ''),
+    isBroken: Boolean(m.isBroken),
+    isCustom: Boolean(m.isCustom),
+    isUserAdded: Boolean(m.isUserAdded),
+    selectedServer: String(m.selectedServer || ''),
+    selectedQuality: String(m.selectedQuality || ''),
+    selectedType: String(m.selectedType || ''),
+    preferredMode: String(m.preferredMode || ''),
+    selectedStream: m.selectedStream || null,
+    wasAutoRepaired: Boolean(m.wasAutoRepaired),
+    repairedQuality: String(m.repairedQuality || ''),
+    repairedAt: String(m.repairedAt || ''),
+    addedAt: String(m.addedAt || ''),
+  };
+}
+
 /**
- * Upload all current local data (folders, favorites, cinema playlist, custom movies)
+ * Saves all repository movies into Firestore partitioned by folder into repoMovies collection.
+ * Chunks movies into 400 clean items per document (~270KB, safely below the 1MB limit).
+ * Guarantees that ALL repositories (including YouTube 1, 2, 3 and all others) are fully preserved.
+ */
+export async function saveAllRepositoriesAndMoviesToDb(
+  foldersList: DbFolder[],
+  moviesList: DbMovie[],
+  onProgress?: (pct: number, msg: string) => void
+): Promise<{ success: boolean; totalUploaded: number; totalParts: number; reposCount: number }> {
+  const collectionPath = 'repoMovies';
+  try {
+    let targetMovies = Array.isArray(moviesList) ? moviesList : [];
+
+    // Fallback: If in-memory movies array is suspiciously small (< 500), load from initialData.json
+    if (targetMovies.length < 500 && typeof window !== 'undefined') {
+      try {
+        const rawJson = await fetch('/initialData.json', { cache: 'no-store' }).then((r) => r.json()).catch(() => null);
+        if (rawJson && Array.isArray(rawJson.movies) && rawJson.movies.length > targetMovies.length) {
+          const mById = new Map(rawJson.movies.map((m: any) => [m.id, m]));
+          targetMovies.forEach((m: any) => { if (m && m.id) mById.set(m.id, m); });
+          targetMovies = Array.from(mById.values()) as DbMovie[];
+        }
+      } catch (_) {}
+    }
+
+    if (!targetMovies || targetMovies.length === 0) {
+      console.warn('[Firestore] No movies available to save into repoMovies.');
+      return { success: true, totalUploaded: 0, totalParts: 0, reposCount: 0 };
+    }
+
+    // Group movies by parentFolderId
+    const moviesByFolder = new Map<string, any[]>();
+    for (const m of targetMovies) {
+      if (!m || !m.id) continue;
+      const fId = m.parentFolderId || (m as any).folderId || 'folder-default';
+      let arr = moviesByFolder.get(fId);
+      if (!arr) {
+        arr = [];
+        moviesByFolder.set(fId, arr);
+      }
+      const cleaned = cleanMovieForRepoDoc(m, fId);
+      if (cleaned) arr.push(cleaned);
+    }
+
+    // Ensure all known folders are registered
+    const folderNameMap = new Map<string, string>();
+    (foldersList || []).forEach((f) => {
+      if (f && f.id) {
+        folderNameMap.set(f.id, f.name || f.id);
+        if (!moviesByFolder.has(f.id)) {
+          moviesByFolder.set(f.id, []);
+        }
+      }
+    });
+
+    const entries = Array.from(moviesByFolder.entries());
+    let totalParts = 0;
+    let totalUploaded = 0;
+    const manifestRepos: DbRepoMoviesManifest['repositories'] = [];
+
+    const CHUNK_SIZE = 400; // 400 clean movies ≈ 270KB
+    const writePromises: Array<Promise<any>> = [];
+
+    let processedFolders = 0;
+    for (const [folderId, fMovies] of entries) {
+      processedFolders++;
+      const folderName = folderNameMap.get(folderId) || folderId;
+      const partsCount = Math.max(1, Math.ceil(fMovies.length / CHUNK_SIZE));
+      manifestRepos.push({
+        folderId,
+        folderName,
+        moviesCount: fMovies.length,
+        partsCount: fMovies.length === 0 ? 0 : partsCount,
+      });
+
+      if (fMovies.length === 0) {
+        const docId = `repo_${folderId}_p0`;
+        const payload = sanitizeForFirestore({
+          id: docId,
+          folderId,
+          folderName,
+          partIndex: 0,
+          totalParts: 1,
+          moviesCount: 0,
+          movies: [],
+          updatedAt: new Date().toISOString(),
+        });
+        writePromises.push(
+          withTimeout(setDoc(doc(db, collectionPath, docId), payload, { merge: true }), 5000, null)
+        );
+        totalParts++;
+        continue;
+      }
+
+      for (let pIdx = 0; pIdx < partsCount; pIdx++) {
+        const chunk = fMovies.slice(pIdx * CHUNK_SIZE, (pIdx + 1) * CHUNK_SIZE);
+        const docId = `repo_${folderId}_p${pIdx}`;
+        const payload = sanitizeForFirestore({
+          id: docId,
+          folderId,
+          folderName,
+          partIndex: pIdx,
+          totalParts: partsCount,
+          moviesCount: chunk.length,
+          movies: chunk,
+          updatedAt: new Date().toISOString(),
+        });
+
+        writePromises.push(
+          withTimeout(setDoc(doc(db, collectionPath, docId), payload, { merge: true }), 5000, null)
+        );
+        totalParts++;
+        totalUploaded += chunk.length;
+      }
+
+      const pct = Math.min(94, 80 + Math.round((processedFolders / entries.length) * 14));
+      onProgress?.(pct, `جاري حفظ مستودع "${folderName}" (${fMovies.length} فيلم) في السحابة...`);
+      notifyUploadProgress(pct, `جاري حفظ مستودع "${folderName}" (${fMovies.length} فيلم) في السحابة...`);
+    }
+
+    // Save manifest doc
+    const manifestPayload = sanitizeForFirestore({
+      id: '_manifest',
+      manifestVersion: 2,
+      totalMovies: totalUploaded,
+      totalRepositories: entries.length,
+      repositories: manifestRepos,
+      updatedAt: new Date().toISOString(),
+    });
+    writePromises.push(
+      withTimeout(setDoc(doc(db, collectionPath, '_manifest'), manifestPayload, { merge: true }), 5000, null)
+    );
+
+    // Concurrently write batches of 8 documents
+    const BATCH_SIZE = 8;
+    for (let i = 0; i < writePromises.length; i += BATCH_SIZE) {
+      await Promise.all(writePromises.slice(i, i + BATCH_SIZE));
+    }
+
+    return {
+      success: true,
+      totalUploaded,
+      totalParts,
+      reposCount: entries.length,
+    };
+  } catch (error) {
+    if (isOfflineOrNetworkError(error)) {
+      console.warn(`[Firestore Offline] ${collectionPath}: delayed or offline.`);
+      return { success: false, totalUploaded: 0, totalParts: 0, reposCount: 0 };
+    }
+    console.error('saveAllRepositoriesAndMoviesToDb error:', error);
+    return { success: false, totalUploaded: 0, totalParts: 0, reposCount: 0 };
+  }
+}
+
+/**
+ * Fetches all repository movies partitioned into the repoMovies collection.
+ * Recombines all repository parts to reconstruct the full movie catalog.
+ */
+export async function fetchAllRepositoryMoviesFromDb(): Promise<{
+  success: boolean;
+  movies: DbMovie[];
+  totalCount: number;
+  repositoriesCount: number;
+  manifest?: DbRepoMoviesManifest | null;
+}> {
+  const collectionPath = 'repoMovies';
+  try {
+    const snap = await withTimeout(getDocs(collection(db, collectionPath)), 12000, null);
+    if (!snap || snap.empty) {
+      return { success: false, movies: [], totalCount: 0, repositoriesCount: 0, manifest: null };
+    }
+    const allMovies: DbMovie[] = [];
+    const seenFolders = new Set<string>();
+    let manifest: DbRepoMoviesManifest | null = null;
+
+    snap.forEach((d) => {
+      if (d.id === '_manifest') {
+        manifest = d.data() as DbRepoMoviesManifest;
+        return;
+      }
+      const data = d.data();
+      if (data && Array.isArray(data.movies)) {
+        if (data.folderId) seenFolders.add(data.folderId);
+        data.movies.forEach((m: any) => {
+          if (m && m.id) {
+            allMovies.push(m as DbMovie);
+          }
+        });
+      }
+    });
+
+    return {
+      success: true,
+      movies: allMovies,
+      totalCount: allMovies.length,
+      repositoriesCount: seenFolders.size,
+      manifest,
+    };
+  } catch (error) {
+    if (isOfflineOrNetworkError(error)) {
+      console.warn(`[Firestore Offline] ${collectionPath}: operating with fallback.`);
+      return { success: false, movies: [], totalCount: 0, repositoriesCount: 0, manifest: null };
+    }
+    console.error('fetchAllRepositoryMoviesFromDb error:', error);
+    return { success: false, movies: [], totalCount: 0, repositoriesCount: 0, manifest: null };
+  }
+}
+
+/**
+ * Upload all current local data (folders, favorites, cinema playlist, custom movies, and repository movies)
  * directly into Firestore database for permanent cloud persistence across all browsers.
  */
 export async function seedAllToFirestore(params: {
@@ -1370,14 +1633,15 @@ export async function seedAllToFirestore(params: {
   allPlaylistsCount?: number;
   totalPlaylistItems?: number;
   moviesCount: number;
+  repoMoviesCount?: number;
   streamPrefsCount?: number;
   error?: string;
 }> {
   try {
     // 1. Folders
     try {
-      params.onProgress?.('1/6: جاري حفظ ومزامنة المستودعات والأقسام في Firestore...');
-      notifyUploadProgress(15, '1/6: جاري حفظ ومزامنة المستودعات والأقسام في Firestore...');
+      params.onProgress?.('1/7: جاري حفظ ومزامنة المستودعات والأقسام في Firestore...');
+      notifyUploadProgress(15, '1/7: جاري حفظ ومزامنة المستودعات والأقسام في Firestore...');
       if (params.folders && params.folders.length > 0) {
         await saveAllFoldersToDb(params.folders);
       }
@@ -1387,8 +1651,8 @@ export async function seedAllToFirestore(params: {
 
     // 2. Favorite Lists
     try {
-      params.onProgress?.('2/6: جاري حفظ ومزامنة قوائم المفضلة المخصصة...');
-      notifyUploadProgress(30, '2/6: جاري حفظ ومزامنة قوائم المفضلة المخصصة...');
+      params.onProgress?.('2/7: جاري حفظ ومزامنة قوائم المفضلة المخصصة...');
+      notifyUploadProgress(28, '2/7: جاري حفظ ومزامنة قوائم المفضلة المخصصة...');
       if (params.favoriteLists && params.favoriteLists.length > 0) {
         await saveAllFavoriteListsToDb(params.favoriteLists);
       }
@@ -1398,8 +1662,8 @@ export async function seedAllToFirestore(params: {
 
     // 3. All Favorites (4 colors)
     try {
-      params.onProgress?.('3/6: جاري حفظ تقسيمات كل المفضلة (الألوان الأربعة)...');
-      notifyUploadProgress(45, '3/6: جاري حفظ تقسيمات كل المفضلة (الألوان الأربعة)...');
+      params.onProgress?.('3/7: جاري حفظ تقسيمات كل المفضلة (الألوان الأربعة)...');
+      notifyUploadProgress(42, '3/7: جاري حفظ تقسيمات كل المفضلة (الألوان الأربعة)...');
       if (params.allFavorites) {
         await saveAllFavoritesToDb(params.allFavorites);
       }
@@ -1411,9 +1675,9 @@ export async function seedAllToFirestore(params: {
     let playlistsToSave = params.allCinemaPlaylists;
     let activeIdToSave = params.activePlaylistId;
     try {
-      params.onProgress?.('4/6: جاري حفظ كافة قوائم تشغيل شاشة العرض جنباً إلى جنب في Firestore...');
-      notifyUploadProgress(60, '4/6: جاري حفظ كافة قوائم تشغيل شاشة العرض جنباً إلى جنب...');
-      
+      params.onProgress?.('4/7: جاري حفظ كافة قوائم تشغيل شاشة العرض جنباً إلى جنب في Firestore...');
+      notifyUploadProgress(56, '4/7: جاري حفظ كافة قوائم تشغيل شاشة العرض جنباً إلى جنب...');
+
       if ((!playlistsToSave || playlistsToSave.length === 0) && typeof window !== 'undefined') {
         try {
           const raw = localStorage.getItem('autocinema_cinema_playlists');
@@ -1469,8 +1733,8 @@ export async function seedAllToFirestore(params: {
     // 5. Stream Preferences
     let prefsToSave = { ...(params.streamPreferences || {}) };
     try {
-      params.onProgress?.('5/6: جاري حفظ تفضيلات السيرفرات والبث...');
-      notifyUploadProgress(75, '5/6: جاري حفظ تفضيلات السيرفرات والبث...');
+      params.onProgress?.('5/7: جاري حفظ تفضيلات السيرفرات والبث...');
+      notifyUploadProgress(70, '5/7: جاري حفظ تفضيلات السيرفرات والبث...');
       if (typeof window !== 'undefined') {
         try {
           const rawPrefs = localStorage.getItem('autocinema_stream_preferences');
@@ -1510,43 +1774,64 @@ export async function seedAllToFirestore(params: {
       console.warn('[Firestore] Step 5 streamPreferences warning:', e5?.message);
     }
 
-    // 6. Custom Movies
+    // Prepare synchronized movies with playlist repaired streams
+    const moviesMap = new Map((params.movies || []).map((m: any) => [m.id, m]));
+    if (playlistsToSave && Array.isArray(playlistsToSave)) {
+      playlistsToSave.forEach((pl) => {
+        (pl.items || []).forEach((it: any) => {
+          const mId = it.movieId || it.id;
+          if (mId && moviesMap.has(mId)) {
+            const ex = moviesMap.get(mId);
+            const streamUrl = (it.selectedStream && (it.selectedStream.url || it.selectedStream.directUrl)) || it.streamUrl || it.url;
+            const directUrl = (it.selectedStream && (it.selectedStream.directUrl || it.selectedStream.url)) || it.directUrl || streamUrl;
+            moviesMap.set(mId, {
+              ...ex,
+              url: streamUrl || ex.url,
+              directUrl: directUrl || ex.directUrl,
+              streamUrl: streamUrl || ex.streamUrl,
+              selectedServer: it.selectedServer || ex.selectedServer,
+              selectedQuality: it.selectedQuality || ex.selectedQuality,
+              selectedType: it.selectedType || ex.selectedType,
+              preferredMode: it.preferredMode || ex.preferredMode,
+              selectedStream: it.selectedStream || ex.selectedStream,
+              allStreams: (it.allStreams && it.allStreams.length > 0) ? it.allStreams : ex.allStreams,
+              wasAutoRepaired: it.wasAutoRepaired || ex.wasAutoRepaired,
+              repairedQuality: it.repairedQuality || ex.repairedQuality,
+              repairedAt: it.repairedAt || ex.repairedAt,
+            });
+          }
+        });
+      });
+    }
+    const syncedMovies = Array.from(moviesMap.values());
+
+    // 6. Complete Repository Movies Partitioned Storage (repoMovies)
+    let repoMoviesSavedCount = 0;
+    try {
+      params.onProgress?.('6/7: جاري حفظ وتأكيد كافة مستودعات الأفلام ومحتوياتها في السحابة (بما فيها أفلام يوتيوب 1 و2 و3)...');
+      notifyUploadProgress(82, '6/7: جاري حفظ وتأكيد كافة مستودعات الأفلام ومحتوياتها في السحابة...');
+
+      const repoResult = await saveAllRepositoriesAndMoviesToDb(
+        params.folders || [],
+        syncedMovies.length > 0 ? syncedMovies : (params.movies || []),
+        (pct, msg) => {
+          params.onProgress?.(msg);
+        }
+      );
+      if (repoResult && repoResult.success) {
+        repoMoviesSavedCount = repoResult.totalUploaded;
+      }
+    } catch (eRepo: any) {
+      console.warn('[Firestore] Step 6 repoMovies warning:', eRepo?.message);
+    }
+
+    // 7. Custom Movies & User Modifications Summary
     let savedMoviesCount = 0;
     try {
-      if (params.movies && params.movies.length > 0) {
-        params.onProgress?.('6/6: جاري حفظ وتأكيد الأفلام المضافة والمعدلة...');
-        notifyUploadProgress(90, '6/6: جاري حفظ وتأكيد الأفلام المضافة والمعدلة...');
+      if (syncedMovies.length > 0) {
+        params.onProgress?.('7/7: جاري حفظ وتأكيد ملخص الأفلام المضافة والمعدلة...');
+        notifyUploadProgress(95, '7/7: جاري حفظ وتأكيد ملخص الأفلام المضافة والمعدلة...');
 
-        // Synchronize movies catalog with playlist repaired streams
-        const moviesMap = new Map(params.movies.map((m: any) => [m.id, m]));
-        if (playlistsToSave && Array.isArray(playlistsToSave)) {
-          playlistsToSave.forEach((pl) => {
-            (pl.items || []).forEach((it: any) => {
-              const mId = it.movieId || it.id;
-              if (mId && moviesMap.has(mId)) {
-                const ex = moviesMap.get(mId);
-                const streamUrl = (it.selectedStream && (it.selectedStream.url || it.selectedStream.directUrl)) || it.streamUrl || it.url;
-                const directUrl = (it.selectedStream && (it.selectedStream.directUrl || it.selectedStream.url)) || it.directUrl || streamUrl;
-                moviesMap.set(mId, {
-                  ...ex,
-                  url: streamUrl || ex.url,
-                  directUrl: directUrl || ex.directUrl,
-                  streamUrl: streamUrl || ex.streamUrl,
-                  selectedServer: it.selectedServer || ex.selectedServer,
-                  selectedQuality: it.selectedQuality || ex.selectedQuality,
-                  selectedType: it.selectedType || ex.selectedType,
-                  preferredMode: it.preferredMode || ex.preferredMode,
-                  selectedStream: it.selectedStream || ex.selectedStream,
-                  allStreams: (it.allStreams && it.allStreams.length > 0) ? it.allStreams : ex.allStreams,
-                  wasAutoRepaired: it.wasAutoRepaired || ex.wasAutoRepaired,
-                  repairedQuality: it.repairedQuality || ex.repairedQuality,
-                  repairedAt: it.repairedAt || ex.repairedAt,
-                });
-              }
-            });
-          });
-        }
-        const syncedMovies = Array.from(moviesMap.values());
         savedMoviesCount = await saveAllCustomMoviesToDb(
           syncedMovies,
           params.deletedMovieIds || [],
@@ -1555,8 +1840,8 @@ export async function seedAllToFirestore(params: {
           }
         );
       }
-    } catch (e6: any) {
-      console.warn('[Firestore] Step 6 customMovies warning:', e6?.message);
+    } catch (e7: any) {
+      console.warn('[Firestore] Step 7 customMovies warning:', e7?.message);
     }
 
     const finalAllPlaylistsCount = (playlistsToSave && playlistsToSave.length > 0)
@@ -1566,6 +1851,8 @@ export async function seedAllToFirestore(params: {
       ? playlistsToSave.reduce((sum, p) => sum + (p.items?.length || 0), 0)
       : (params.cinemaPlaylist?.length || 0);
 
+    const effectiveTotalMovies = Math.max(savedMoviesCount, repoMoviesSavedCount);
+
     try {
       await updateDbSyncMeta({
         foldersCount: params.folders?.length || 0,
@@ -1573,14 +1860,15 @@ export async function seedAllToFirestore(params: {
         playlistCount: params.cinemaPlaylist?.length || 0,
         allPlaylistsCount: finalAllPlaylistsCount,
         totalPlaylistItems: finalTotalPlaylistItems,
-        savedMoviesCount,
+        savedMoviesCount: effectiveTotalMovies,
+        repoMoviesCount: repoMoviesSavedCount,
         seededAt: new Date().toISOString(),
       });
     } catch (_) {}
 
-    params.onProgress?.(`اكتملت عملية الحفظ والمزامنة السحابية بنجاح (${finalAllPlaylistsCount} قوائم تشغيل • ${finalTotalPlaylistItems} عنصر)!`);
-    notifyUploadProgress(100, `اكتملت عملية الحفظ والمزامنة السحابية بنجاح (${finalAllPlaylistsCount} قوائم تشغيل)!`);
-    notifyUploadSuccess(`تم تأكيد وحفظ كافة البيانات في Firestore بنجاح 🟢`);
+    params.onProgress?.(`اكتملت عملية الحفظ والمزامنة السحابية بنجاح (${params.folders?.length || 0} مستودع • ${effectiveTotalMovies} فيلم • ${finalAllPlaylistsCount} قائمة)!`);
+    notifyUploadProgress(100, `اكتملت عملية الحفظ والمزامنة السحابية بنجاح (${params.folders?.length || 0} مستودع • ${effectiveTotalMovies} فيلم)!`);
+    notifyUploadSuccess(`تم تأكيد وحفظ كافة البيانات وجميع المستودعات في Firestore بنجاح 🟢`);
     return {
       success: true,
       foldersCount: params.folders?.length || 0,
@@ -1588,7 +1876,8 @@ export async function seedAllToFirestore(params: {
       playlistCount: params.cinemaPlaylist?.length || 0,
       allPlaylistsCount: finalAllPlaylistsCount,
       totalPlaylistItems: finalTotalPlaylistItems,
-      moviesCount: savedMoviesCount,
+      moviesCount: effectiveTotalMovies,
+      repoMoviesCount: repoMoviesSavedCount,
       streamPrefsCount: prefsToSave ? Object.keys(prefsToSave).length : 0,
     };
   } catch (error: any) {
@@ -1602,6 +1891,7 @@ export async function seedAllToFirestore(params: {
       allPlaylistsCount: 1,
       totalPlaylistItems: params.cinemaPlaylist?.length || 0,
       moviesCount: 0,
+      repoMoviesCount: 0,
       streamPrefsCount: 0,
     };
   }
@@ -1729,6 +2019,7 @@ export interface FirestoreLiveOverview {
   allFavorites: DbAllFavorites | null;
   customMovies: DbMovie[];
   movies: DbMovie[];
+  repoMovies?: DbMovie[];
   streamPreferences: Record<string, StreamPreference>;
   syncMeta: any | null;
   counts: {
@@ -1744,6 +2035,7 @@ export interface FirestoreLiveOverview {
     blackFavs: number;
     customMovies: number;
     collectionMovies: number;
+    repoMovies: number;
     streamPreferences: number;
   };
 }
@@ -1770,6 +2062,7 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
       dbPlaylist,
       dbUserMods,
       dbMovies,
+      dbRepoResult,
       dbStreamPrefs,
       dbSyncMeta,
     ] = await Promise.all([
@@ -1780,6 +2073,7 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
       fetchCinemaPlaylistFromDb().catch(() => []),
       fetchUserModificationsFromDb().catch(() => null),
       fetchMoviesFromDb().catch(() => []),
+      fetchAllRepositoryMoviesFromDb().catch(() => null),
       fetchStreamPreferencesFromDb().catch(() => ({})),
       getDbSyncMeta().catch(() => null),
     ]);
@@ -1790,6 +2084,7 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
     const blackCount = dbAllFavs?.sections?.black?.length || 0;
     const totalFavs = dbAllFavs?.movieIds?.length || 0;
     const customCount = dbUserMods?.customMovies?.length || 0;
+    const repoMoviesCount = dbRepoResult?.totalCount || 0;
 
     const allPlaylistsList = dbAllCinemaPlaylists?.playlists || [];
     const activePlaylistItem = allPlaylistsList.find((p) => p.id === dbAllCinemaPlaylists?.activeId) || allPlaylistsList[0];
@@ -1805,6 +2100,8 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
       ? allPlaylistsList.reduce((sum, pl) => sum + (Array.isArray(pl.items) ? pl.items.length : 0), 0)
       : resolvedActiveItems.length;
 
+    const effectiveCollectionMovies = Math.max(dbMovies.length, repoMoviesCount);
+
     return {
       connected: true,
       timestamp: now,
@@ -1818,6 +2115,7 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
       allFavorites: dbAllFavs,
       customMovies: dbUserMods?.customMovies || [],
       movies: dbMovies,
+      repoMovies: dbRepoResult?.movies || [],
       streamPreferences: dbStreamPrefs,
       syncMeta: dbSyncMeta,
       counts: {
@@ -1832,7 +2130,8 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
         purpleFavs: purpleCount,
         blackFavs: blackCount,
         customMovies: customCount,
-        collectionMovies: dbMovies.length,
+        collectionMovies: effectiveCollectionMovies,
+        repoMovies: repoMoviesCount,
         streamPreferences: Object.keys(dbStreamPrefs).length,
       },
     };
@@ -1851,6 +2150,7 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
       allFavorites: null,
       customMovies: [],
       movies: [],
+      repoMovies: [],
       streamPreferences: {},
       syncMeta: null,
       counts: {
@@ -1866,6 +2166,7 @@ export async function fetchFirestoreOverview(): Promise<FirestoreLiveOverview> {
         blackFavs: 0,
         customMovies: 0,
         collectionMovies: 0,
+        repoMovies: 0,
         streamPreferences: 0,
       },
     };

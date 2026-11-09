@@ -25,7 +25,12 @@ export function extractYouTubeId(urlStr?: string): string | null {
   const match = trimmed.match(/(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/|(?:v|e(?:mbed)?)\/|\S*?[?&]v=|(?:shorts|live)\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i);
   if (match) return match[1];
   try {
-    const u = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+    const base = trimmed.startsWith('/') ? `http://localhost${trimmed}` : (trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+    const u = new URL(base);
+    if (u.pathname.includes('youtube-player') || u.pathname.includes('player-embed') || u.pathname.includes('youtube')) {
+      const v = u.searchParams.get('v') || u.searchParams.get('id') || u.searchParams.get('videoId');
+      if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
+    }
     if (u.hostname.includes('youtube.com')) {
       const v = u.searchParams.get('v');
       if (v && /^[a-zA-Z0-9_-]{11}$/.test(v)) return v;
@@ -300,6 +305,8 @@ function findMatchingStream(streams: any[], pref: any) {
 function getStreamQualityScore(quality: string | undefined): number {
   if (!quality) return 720;
   const q = String(quality).toLowerCase().trim();
+  if (/cinema/i.test(q)) return 1100;
+  if (/app|تطبيق/i.test(q)) return 2000;
   if (/\b344\b|344p/i.test(q)) return 344;
   if (/\b360\b|360p/i.test(q)) return 360;
   if (/\b480\b|480p/i.test(q)) return 480;
@@ -327,9 +334,11 @@ function getStreamQualityTier(qScore: number): number {
   if (qScore >= 350 && qScore <= 380) return 2; // 2nd priority: 360p
   if (qScore > 380 && qScore <= 540) return 3;  // 3rd priority: 480p
   if (qScore > 540 && qScore <= 800) return 4;  // 4th priority: 720p
-  if (qScore > 800 && qScore <= 1200) return 5; // 5th priority: 1080p
-  if (qScore > 1200) return 6;                  // 6th priority: 1440p / 2160p / 4K
-  return 7;                                     // 7th priority: < 340p (240p, 144p)
+  if (qScore > 800 && qScore <= 1080) return 5; // 5th priority: 1080p
+  if (qScore > 1080 && qScore <= 1200) return 6; // 6th priority: Cinema player
+  if (qScore > 1200 && qScore < 2000) return 7; // 7th priority: 1440p / 2160p / 4K
+  if (qScore >= 2000) return 8;                 // 8th priority: App / Popout
+  return 9;                                     // 9th priority: < 340p (240p, 144p)
 }
 
 function sortStreamsAscending(streams: any[]): any[] {
@@ -342,6 +351,20 @@ function pickDefaultQualityStream(streams: any[], userPref?: any): any {
     const matched = findMatchingStream(streams, userPref);
     if (matched) return matched;
   }
+  // Check YouTube streams first - always prioritize preferred YouTube stream or YouTube 1080p player
+  const ytPreferred = streams.find(
+    (s) =>
+      s &&
+      s.preferred &&
+      (s.isYouTube ||
+        extractYouTubeId(s.url) ||
+        extractYouTubeId(s.directUrl) ||
+        s.url?.includes('/api/youtube-player'))
+  );
+  if (ytPreferred) return ytPreferred;
+
+  const preferred = streams.find((s) => s && s.preferred);
+  if (preferred) return preferred;
   const sorted = sortStreamsByQualityTiersAscending(streams);
   return sorted[0] || streams[0];
 }
@@ -400,6 +423,10 @@ function sortStreamsByQualityTiersAscending(
   const candidates = pool.length > 0 ? pool : deduped;
 
   return [...candidates].sort((a, b) => {
+    // 0. Preferred streams always sort first
+    if (a?.preferred && !b?.preferred) return -1;
+    if (!a?.preferred && b?.preferred) return 1;
+
     const scoreA = getStreamQualityScore(a?.quality);
     const scoreB = getStreamQualityScore(b?.quality);
     const tierA = getStreamQualityTier(scoreA);
@@ -409,7 +436,13 @@ function sortStreamsByQualityTiersAscending(
     if (tierA !== tierB) return tierA - tierB;
     if (scoreA !== scoreB) return scoreA - scoreB;
 
-    // 2. Within same tier, prefer direct HLS/MP4 streams
+    // 2. Official YouTube player bridge
+    const isYtBridgeA = a?.url?.includes('/api/youtube-player') || a?.directUrl?.includes('/api/youtube-player');
+    const isYtBridgeB = b?.url?.includes('/api/youtube-player') || b?.directUrl?.includes('/api/youtube-player');
+    if (isYtBridgeA && !isYtBridgeB) return -1;
+    if (!isYtBridgeA && isYtBridgeB) return 1;
+
+    // 3. Within same tier, prefer direct HLS/MP4 streams
     const isDirectA = a?.type === "hls" || a?.type === "mp4" || a?.url?.includes(".m3u8") || a?.directUrl?.includes(".m3u8");
     const isDirectB = b?.type === "hls" || b?.type === "mp4" || b?.url?.includes(".m3u8") || b?.directUrl?.includes(".m3u8");
     if (isDirectA && !isDirectB) return -1;
@@ -664,23 +697,21 @@ function getPlayableEmbedUrl(stream: any, movie: any): string {
   let rawUrl = (stream?.url || stream?.directUrl || movie?.originalUrl || movie?.url || "").trim();
   if (!rawUrl) return "";
 
-  // Direct YouTube Handler: Always embed cleanly via official embed player
+  // Direct YouTube Handler:
+  if (rawUrl.startsWith("/api/youtube-player")) {
+    return rawUrl;
+  }
+  if (rawUrl.startsWith("https://www.youtube.com/embed/")) {
+    return rawUrl;
+  }
+
   const ytId =
     extractYouTubeId(rawUrl) ||
     extractYouTubeId(stream?.directUrl) ||
     extractYouTubeId(movie?.originalUrl) ||
     extractYouTubeId(movie?.url);
   if (ytId) {
-    if (rawUrl.includes("mute=1")) {
-      return `https://www.youtube.com/embed/${ytId}?autoplay=1&mute=1&playsinline=1&rel=0`;
-    }
-    if (rawUrl.includes("nocookie")) {
-      return `https://www.youtube-nocookie.com/embed/${ytId}?autoplay=1&playsinline=1&rel=0`;
-    }
-    if (rawUrl.includes("feature=oembed")) {
-      return `https://www.youtube.com/embed/${ytId}?feature=oembed`;
-    }
-    return `https://www.youtube.com/embed/${ytId}?autoplay=1&playsinline=1&rel=0`;
+    return `https://www.youtube.com/embed/${ytId}?enablejsapi=1&playsinline=1&rel=0`;
   }
 
   if (rawUrl.startsWith("/api/player-embed")) {
@@ -900,6 +931,12 @@ export function CinemaScreenModal({
       return "manual";
     }
   });
+
+  // Drag & drop state for horizontal reordering of playlist tabs
+  const [draggedPlaylistId, setDraggedPlaylistId] = useState<string | null>(null);
+  const [dragOverPlaylistId, setDragOverPlaylistId] = useState<string | null>(null);
+  const [dragOverPosition, setDragOverPosition] = useState<"before" | "after">("before");
+  const isDraggingTabRef = useRef<boolean>(false);
 
   // Strict deduplication helper to ensure no movie is added twice to the same playlist
   const deduplicatePlaylistItems = useCallback((items: any[]): any[] => {
@@ -1400,6 +1437,106 @@ export function CinemaScreenModal({
     });
     setTimeout(() => setCloudNotice(null), 3500);
   };
+
+  // -------------------------------------------------------------
+  // Horizontal Reordering of Playlists (Drag & Drop + Directions)
+  // -------------------------------------------------------------
+  const handleReorderPlaylists = useCallback((fromId: string, toId: string, pos: "before" | "after" = "before") => {
+    if (!fromId || !toId || fromId === toId) return;
+
+    setPlaylists((prev) => {
+      const fromIdx = prev.findIndex((p) => p.id === fromId);
+      const toIdx = prev.findIndex((p) => p.id === toId);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+
+      let targetIdx = next.findIndex((p) => p.id === toId);
+      if (targetIdx === -1) targetIdx = toIdx;
+      if (pos === "after") {
+        targetIdx += 1;
+      }
+
+      next.splice(targetIdx, 0, moved);
+
+      try {
+        localStorage.setItem(CINEMA_PLAYLISTS_KEY, JSON.stringify(next));
+      } catch (_) {}
+
+      saveAllCinemaPlaylistsToDb(next, activePlaylistId).catch((err) =>
+        console.warn("[CinemaScreen] Failed to save reordered playlists to Firestore:", err)
+      );
+
+      try {
+        fetch("/api/update-cinema-playlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            allCinemaPlaylists: next,
+            activePlaylistId: activePlaylistId,
+          }),
+        }).catch(() => {});
+      } catch (_) {}
+
+      try {
+        window.dispatchEvent(new CustomEvent("autocinema:cinema-playlists-updated"));
+      } catch (_) {}
+
+      setCloudNotice({
+        status: "success",
+        text: `✓ تم تغيير الترتيب الأفقي للقوائم: "${moved.name}" ↔️`,
+      });
+      setTimeout(() => setCloudNotice(null), 3000);
+
+      return next;
+    });
+  }, [activePlaylistId]);
+
+  const handleMovePlaylistDirection = useCallback((playlistId: string, direction: "prev" | "next") => {
+    setPlaylists((prev) => {
+      const idx = prev.findIndex((p) => p.id === playlistId);
+      if (idx === -1) return prev;
+      // In RTL: "prev" moves rightward (lower index in list), "next" moves leftward (higher index in list)
+      const targetIdx = direction === "prev" ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev;
+
+      const next = [...prev];
+      const [moved] = next.splice(idx, 1);
+      next.splice(targetIdx, 0, moved);
+
+      try {
+        localStorage.setItem(CINEMA_PLAYLISTS_KEY, JSON.stringify(next));
+      } catch (_) {}
+
+      saveAllCinemaPlaylistsToDb(next, activePlaylistId).catch((err) =>
+        console.warn("[CinemaScreen] Failed to save reordered playlists:", err)
+      );
+
+      try {
+        fetch("/api/update-cinema-playlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            allCinemaPlaylists: next,
+            activePlaylistId: activePlaylistId,
+          }),
+        }).catch(() => {});
+      } catch (_) {}
+
+      try {
+        window.dispatchEvent(new CustomEvent("autocinema:cinema-playlists-updated"));
+      } catch (_) {}
+
+      setCloudNotice({
+        status: "success",
+        text: `✓ تم تحريك "${moved.name}" ${direction === "prev" ? "لليمين ◀" : "لليسار ▶"}`,
+      });
+      setTimeout(() => setCloudNotice(null), 2500);
+
+      return next;
+    });
+  }, [activePlaylistId]);
 
   const handleRenamePlaylistItem = (itemIndex: number, newTitle: string) => {
     const clean = (newTitle || "").trim();
@@ -2052,25 +2189,8 @@ export function CinemaScreenModal({
   // Accurately tests if the video element is genuinely decoding frames and advancing playback
   // -------------------------------------------------------------
   const verifyScreenPlayback = useCallback(
-    (timeoutMs = 3800, explicitMode?: string, streamToCheck?: any): Promise<{ ok: boolean; reason?: string }> => {
+    (timeoutMs = 3800): Promise<{ ok: boolean; reason?: string }> => {
       return new Promise((resolve) => {
-        const mode = explicitMode || playbackMode;
-        const checkIsYt = !!(
-          streamToCheck?.isYouTube ||
-          streamToCheck?.youtubeId ||
-          extractYouTubeId(streamToCheck?.url) ||
-          extractYouTubeId(streamToCheck?.directUrl) ||
-          extractYouTubeId(currentMovie?.originalUrl) ||
-          extractYouTubeId(currentMovie?.url) ||
-          extractYouTubeId(currentStream?.url) ||
-          extractYouTubeId(currentStream?.directUrl) ||
-          currentStream?.isYouTube
-        );
-        if (mode === "embed" || checkIsYt || streamToCheck?.type === "embed" || currentStream?.type === "embed") {
-          resolve({ ok: true, reason: "embed_mode_verified" });
-          return;
-        }
-
         let isDone = false;
         let pollInterval: any = null;
         let timeoutHandle: any = null;
@@ -2092,6 +2212,21 @@ export function CinemaScreenModal({
           cleanup();
           resolve({ ok, reason });
         };
+
+        // For embed players and YouTube streams, they render in iframe and manage their own playback
+        const isCurrentEmbedOrYt =
+          playbackMode === "embed" ||
+          !!(
+            extractYouTubeId(currentStream?.url) ||
+            extractYouTubeId(currentStream?.directUrl) ||
+            extractYouTubeId(currentMovie?.originalUrl) ||
+            extractYouTubeId(currentMovie?.url) ||
+            currentStream?.isYouTube
+          );
+        if (isCurrentEmbedOrYt) {
+          finish(true, "embed_or_youtube_stream");
+          return;
+        }
 
         const onPlaying = () => {
           const v = videoRef.current;
@@ -2171,7 +2306,7 @@ export function CinemaScreenModal({
         }, timeoutMs);
       });
     },
-    []
+    [playbackMode, currentStream, currentMovie]
   );
 
   // -------------------------------------------------------------
@@ -2194,14 +2329,7 @@ export function CinemaScreenModal({
           console.log("[Cinema Auto-Heal] Auto-heal skipped: video is already active on screen.");
           return;
         }
-        const checkIsYt = !!(
-          extractYouTubeId(currentMovie?.originalUrl) ||
-          extractYouTubeId(currentMovie?.url) ||
-          extractYouTubeId(currentStream?.url) ||
-          extractYouTubeId(currentStream?.directUrl) ||
-          currentStream?.isYouTube
-        );
-        if (checkIsYt || playbackMode === "embed") {
+        if (playbackMode === "embed") {
           return;
         }
       }
@@ -2501,15 +2629,8 @@ export function CinemaScreenModal({
         // 1. Immediately transition to movie i: open, play, and display it on screen!
         setActiveIndex(i);
         let currentStreamObj = item.selectedStream;
-        const isYt = !!(
-          extractYouTubeId(item.originalUrl) ||
-          extractYouTubeId(item.url) ||
-          extractYouTubeId(currentStreamObj?.url) ||
-          extractYouTubeId(currentStreamObj?.directUrl) ||
-          currentStreamObj?.isYouTube
-        );
         const initialMode =
-          isYt || (currentStreamObj?.preferredMode || item.preferredMode) === "embed"
+          (currentStreamObj?.preferredMode || item.preferredMode) === "embed"
             ? "embed"
             : "direct";
         setPlaybackMode(initialMode);
@@ -2544,33 +2665,38 @@ export function CinemaScreenModal({
         const directMediaUrl = getPlayableDirectUrl(currentStreamObj, item);
 
         // 2. Perform thorough verification:
+        const itemYtId =
+          extractYouTubeId(currentStreamObj?.url) ||
+          extractYouTubeId(currentStreamObj?.directUrl) ||
+          extractYouTubeId(item.originalUrl) ||
+          extractYouTubeId(item.url);
+        const isItemYouTube = !!(itemYtId || currentStreamObj?.isYouTube);
+
+        // A: Probe link health via server
         let probeIsAlive = false;
-        let screenPlaybackOk = false;
-
-        if (isYt || initialMode === "embed") {
+        if (isItemYouTube) {
           probeIsAlive = true;
+        } else if (directMediaUrl) {
+          const p = await probeStreamAlive(directMediaUrl, currentStreamObj?.directUrl, movieOriginUrl || directMediaUrl);
+          probeIsAlive = p.alive;
+        } else if (currentStreamObj?.url) {
+          const p = await probeStreamAlive(currentStreamObj.url, currentStreamObj.directUrl, movieOriginUrl || currentStreamObj.url);
+          probeIsAlive = p.alive;
+        }
+
+        await waitWhilePaused();
+        if (cancelCheckRef.current) break;
+
+        // B: True on-screen playback test (give video element time to attach and buffer)
+        let screenPlaybackOk = false;
+        if (isItemYouTube) {
           screenPlaybackOk = true;
-        } else {
-          // A: Probe link health via server
-          if (directMediaUrl) {
-            const p = await probeStreamAlive(directMediaUrl, currentStreamObj?.directUrl, movieOriginUrl || directMediaUrl);
-            probeIsAlive = p.alive;
-          } else if (currentStreamObj?.url) {
-            const p = await probeStreamAlive(currentStreamObj.url, currentStreamObj.directUrl, movieOriginUrl || currentStreamObj.url);
-            probeIsAlive = p.alive;
-          }
-
-          await waitWhilePaused();
-          if (cancelCheckRef.current) break;
-
-          // B: True on-screen playback test (give video element time to attach and buffer)
-          if (probeIsAlive) {
-            // Wait 400ms for React/HLS DOM mount
-            await new Promise((r) => setTimeout(r, 400));
-            // Verify playback on the real video element on screen
-            const verifyResult = await verifyScreenPlayback(3800, initialMode, currentStreamObj);
-            screenPlaybackOk = verifyResult.ok;
-          }
+        } else if (probeIsAlive) {
+          // Wait 400ms for React/HLS DOM mount
+          await new Promise((r) => setTimeout(r, 400));
+          // Verify playback on the real video element on screen
+          const verifyResult = await verifyScreenPlayback(3800);
+          screenPlaybackOk = verifyResult.ok;
         }
 
         await waitWhilePaused();
@@ -2801,15 +2927,8 @@ export function CinemaScreenModal({
     const title = formatCleanMovieTitle(item.movieTitle || item.title || `فيلم #${idx + 1}`, item, movies);
 
     const currentStreamObj = item.selectedStream;
-    const isYt = !!(
-      extractYouTubeId(item.originalUrl) ||
-      extractYouTubeId(item.url) ||
-      extractYouTubeId(currentStreamObj?.url) ||
-      extractYouTubeId(currentStreamObj?.directUrl) ||
-      currentStreamObj?.isYouTube
-    );
     const initialMode =
-      isYt || (currentStreamObj?.preferredMode || item.preferredMode) === "embed"
+      (currentStreamObj?.preferredMode || item.preferredMode) === "embed"
         ? "embed"
         : "direct";
     setPlaybackMode(initialMode);
@@ -2854,26 +2973,31 @@ export function CinemaScreenModal({
       }
     };
 
+    const itemYtId =
+      extractYouTubeId(currentStreamObj?.url) ||
+      extractYouTubeId(currentStreamObj?.directUrl) ||
+      extractYouTubeId(item.originalUrl) ||
+      extractYouTubeId(item.url);
+    const isItemYouTube = !!(itemYtId || currentStreamObj?.isYouTube);
+
     let probeIsAlive = false;
-    let screenPlaybackOk = false;
-
-    if (isYt || initialMode === "embed") {
+    if (isItemYouTube) {
       probeIsAlive = true;
-      screenPlaybackOk = true;
-    } else {
-      if (directMediaUrl) {
-        const p = await probeStreamAlive(directMediaUrl, currentStreamObj?.directUrl, movieOriginUrl || directMediaUrl);
-        probeIsAlive = p.alive;
-      } else if (currentStreamObj?.url) {
-        const p = await probeStreamAlive(currentStreamObj.url, currentStreamObj.directUrl, movieOriginUrl || currentStreamObj.url);
-        probeIsAlive = p.alive;
-      }
+    } else if (directMediaUrl) {
+      const p = await probeStreamAlive(directMediaUrl, currentStreamObj?.directUrl, movieOriginUrl || directMediaUrl);
+      probeIsAlive = p.alive;
+    } else if (currentStreamObj?.url) {
+      const p = await probeStreamAlive(currentStreamObj.url, currentStreamObj.directUrl, movieOriginUrl || currentStreamObj.url);
+      probeIsAlive = p.alive;
+    }
 
-      if (probeIsAlive) {
-        await new Promise((r) => setTimeout(r, 400));
-        const verifyRes = await verifyScreenPlayback(3800, initialMode, currentStreamObj);
-        screenPlaybackOk = verifyRes.ok;
-      }
+    let screenPlaybackOk = false;
+    if (isItemYouTube) {
+      screenPlaybackOk = true;
+    } else if (probeIsAlive) {
+      await new Promise((r) => setTimeout(r, 400));
+      const verifyRes = await verifyScreenPlayback(3800);
+      screenPlaybackOk = verifyRes.ok;
     }
 
     const isWorking = probeIsAlive && screenPlaybackOk;
@@ -3029,13 +3153,21 @@ export function CinemaScreenModal({
       if (pref) {
         const matched = findMatchingStream(sorted, pref);
         if (matched && (matched.url !== currentStream?.url || matched.id !== currentStream?.id)) {
-          const mode =
-            pref.playbackMode ||
-            (matched.type === "embed"
-              ? "embed"
-              : matched.type === "hls" || matched.type === "mp4" || matched.directUrl?.includes(".m3u8")
-              ? "direct"
-              : "embed");
+          const isMatchedYt = !!(
+            extractYouTubeId(matched.url) ||
+            extractYouTubeId(matched.directUrl) ||
+            extractYouTubeId(currentMovie.originalUrl) ||
+            matched.isYouTube ||
+            matched.url?.includes("/api/youtube-player")
+          );
+          const mode = isMatchedYt
+            ? "embed"
+            : (pref.playbackMode ||
+              (matched.type === "embed"
+                ? "embed"
+                : matched.type === "hls" || matched.type === "mp4" || matched.directUrl?.includes(".m3u8")
+                ? "direct"
+                : "embed"));
           const streamWithPref = { ...matched, preferredMode: mode };
           const updated = [...playlist];
           updated[activeIndex] = {
@@ -3058,7 +3190,14 @@ export function CinemaScreenModal({
       } else if (!currentStream) {
         const def = pickDefaultQualityStream(sorted);
         if (def) {
-          const mode = def.type === "embed" ? "embed" : "direct";
+          const isDefYt = !!(
+            extractYouTubeId(def.url) ||
+            extractYouTubeId(def.directUrl) ||
+            extractYouTubeId(currentMovie.originalUrl) ||
+            def.isYouTube ||
+            def.url?.includes("/api/youtube-player")
+          );
+          const mode = isDefYt ? "embed" : (def.type === "embed" ? "embed" : "direct");
           const streamWithPref = { ...def, preferredMode: mode };
           const updated = [...playlist];
           updated[activeIndex] = {
@@ -3081,15 +3220,15 @@ export function CinemaScreenModal({
       }
     }
 
-    const isYt = !!(
-      extractYouTubeId(currentMovie?.originalUrl) ||
-      extractYouTubeId(currentMovie?.url) ||
+    const isCurrentYt = !!(
       extractYouTubeId(currentStream?.url) ||
       extractYouTubeId(currentStream?.directUrl) ||
+      extractYouTubeId(currentMovie?.originalUrl) ||
+      extractYouTubeId(currentMovie?.url) ||
       currentStream?.isYouTube
     );
 
-    if (isYt) {
+    if (isCurrentYt) {
       setPlaybackMode("embed");
     } else if (pref?.playbackMode) {
       setPlaybackMode(pref.playbackMode);
@@ -3159,6 +3298,19 @@ export function CinemaScreenModal({
     // Give the video an 8.5s window to start playing on initial opening
     normalLoadWatchdogRef.current = setTimeout(() => {
       if (isCheckingPlaylist || isAutoHealing) return;
+
+      // RULE: YouTube streams render in official iframe player; bypass HTML5 video watchdog
+      const isYtStream = !!(
+        extractYouTubeId(currentStream?.url) ||
+        extractYouTubeId(currentStream?.directUrl) ||
+        extractYouTubeId(currentMovie?.originalUrl) ||
+        extractYouTubeId(currentMovie?.url) ||
+        currentStream?.isYouTube
+      );
+      if (isYtStream) {
+        hasPlaybackStartedRef.current = true;
+        return;
+      }
 
       // RULE: If video has already started playing, DO NOT RE-EXTRACT OR UPDATE LINKS!
       if (hasPlaybackStartedRef.current) {
@@ -3353,18 +3505,6 @@ export function CinemaScreenModal({
   // Navigation & Control Actions
   // -------------------------------------------------------------
   const handleSelectMode = (mode: "direct" | "embed") => {
-    const isYt = !!(
-      extractYouTubeId(currentMovie?.originalUrl) ||
-      extractYouTubeId(currentMovie?.url) ||
-      extractYouTubeId(currentStream?.url) ||
-      extractYouTubeId(currentStream?.directUrl) ||
-      currentStream?.isYouTube
-    );
-    if (isYt && mode === "direct") {
-      setHealingSuccessToast("💡 فيديوهات يوتيوب تعمل عبر مشغل التضمين المعتمد (Embed) لضمان أعلى جودة وصوت نقي.");
-      setTimeout(() => setHealingSuccessToast(null), 3500);
-      return;
-    }
     setPlaybackMode(mode);
     if (currentMovie && currentStream) {
       let targetStream = currentStream;
@@ -3614,14 +3754,22 @@ export function CinemaScreenModal({
     let popUrl =
       currentStream?.directUrl || currentStream?.url || currentMovie?.originalUrl;
     if (popUrl) {
-      if (isBuiltinProxyActive && !popUrl.startsWith("/api/")) {
+      const ytId = extractYouTubeId(popUrl);
+      if (ytId) {
+        const vqMatch = String(currentStream?.url || "").match(/vq=([a-z0-9]+)/i);
+        const vq = vqMatch ? vqMatch[1] : "medium";
+        popUrl = `https://www.youtube.com/embed/${ytId}?autoplay=1&playsinline=1&rel=0&vq=${vq}`;
+      } else if (isBuiltinProxyActive && !popUrl.startsWith("/api/")) {
         popUrl = `/api/proxy?url=${encodeURIComponent(popUrl)}`;
       }
-      const w = window.open(popUrl, "_blank", "noopener,noreferrer");
+      const w = window.open(
+        popUrl,
+        "_blank",
+        "width=960,height=560,toolbar=no,menubar=no,status=no,resizable=yes"
+      );
       if (w) {
         try {
-          w.blur();
-          window.focus();
+          w.focus();
         } catch (_) {}
       }
     }
@@ -3634,6 +3782,16 @@ export function CinemaScreenModal({
   const currentYear = extractYearFromTitle(currentTitle);
   const rawSubUrl = currentStream?.subtitles?.[0]?.file || currentMovie?.subtitles?.[0]?.file || "";
   const currentSubtitleUrl = rawSubUrl ? (rawSubUrl.startsWith("/api/") ? rawSubUrl : `/api/stream-proxy?url=${encodeURIComponent(rawSubUrl)}`) : "";
+
+  const isYouTubeStream = !!(
+    extractYouTubeId(currentEmbedUrl) ||
+    extractYouTubeId(currentStream?.url) ||
+    extractYouTubeId(currentStream?.directUrl) ||
+    extractYouTubeId(currentMovie?.originalUrl) ||
+    extractYouTubeId(currentMovie?.url) ||
+    currentStream?.isYouTube ||
+    (currentEmbedUrl && (currentEmbedUrl.includes("youtube.com") || currentEmbedUrl.includes("youtu.be")))
+  );
 
   return (
     <div
@@ -4026,49 +4184,142 @@ export function CinemaScreenModal({
                 </button>
               </div>
 
-              {/* ALWAYS VISIBLE: Playlist Names / Tabs (Always displayed at top for fast switching) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-1 pt-0.5 border-t border-slate-800/80">
-                {playlists.map((pl) => {
-                  const isCurrent = pl.id === activePlaylistId;
-                  const count = isCurrent ? playlist.length : (pl.items || []).length;
-                  return (
-                    <button
-                      key={pl.id}
-                      type="button"
-                      onClick={() => handleSwitchPlaylist(pl.id)}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-all shrink-0 cursor-pointer border ${
-                        isCurrent
-                          ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-400 shadow-md ring-1 ring-indigo-400/50 font-black scale-102"
-                          : "bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700 font-bold"
-                      }`}
-                      title={`التبديل إلى قائمة "${pl.name}" (${count} عنصر)`}
-                    >
-                      <span className="truncate max-w-[130px]">{pl.name}</span>
-                      <span
-                        className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-black ${
-                          isCurrent ? "bg-amber-400 text-slate-950 shadow-sm" : "bg-slate-800 text-slate-400"
-                        }`}
-                      >
-                        {count}
-                      </span>
-                    </button>
-                  );
-                })}
+              {/* ALWAYS VISIBLE: Playlist Names / Tabs (Draggable for horizontal reordering) */}
+              <div className="flex flex-col gap-1 border-t border-slate-800/80 pt-1 pb-1">
+                {draggedPlaylistId && (
+                  <div className="flex items-center justify-center gap-1.5 py-0.5 px-2 rounded-md bg-amber-950/70 border border-amber-500/50 text-[10px] font-black text-amber-300 animate-pulse text-center">
+                    <MoveHorizontalIcon className="w-3 h-3 text-amber-400 shrink-0" />
+                    <span>اسحب بالماوس وضع اسم القائمة بين القوائم لتغيير الترتيب الأفقي ↔️</span>
+                  </div>
+                )}
 
-                {/* Quick Add Playlist Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setNewPlaylistName("");
-                    setNewPlaylistCopyFromCurrent(false);
-                    setIsNewPlaylistModalOpen(true);
-                  }}
-                  className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-amber-300 hover:text-amber-200 border border-slate-700 hover:border-amber-400 text-xs font-bold transition-all shrink-0 cursor-pointer shadow-sm active:scale-95"
-                  title="إنشاء قائمة تشغيل جديدة +"
-                >
-                  <PlusIcon className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span className="text-[11px] font-black">جديدة</span>
-                </button>
+                <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-0.5">
+                  {playlists.map((pl) => {
+                    const isCurrent = pl.id === activePlaylistId;
+                    const count = isCurrent ? playlist.length : (pl.items || []).length;
+                    const isDragged = draggedPlaylistId === pl.id;
+                    const isOver = dragOverPlaylistId === pl.id && !isDragged;
+
+                    return (
+                      <React.Fragment key={pl.id}>
+                        {/* Insertion indicator before this tab in RTL (right edge) */}
+                        {isOver && dragOverPosition === "before" && (
+                          <div className="w-1.5 h-6 bg-gradient-to-b from-amber-400 to-amber-500 rounded-full shadow-[0_0_10px_rgba(251,191,36,0.95)] animate-pulse shrink-0 -mx-0.5 z-20" />
+                        )}
+
+                        <div
+                          draggable={true}
+                          onDragStart={(e) => {
+                            isDraggingTabRef.current = true;
+                            setDraggedPlaylistId(pl.id);
+                            e.dataTransfer.setData("text/plain", pl.id);
+                            e.dataTransfer.effectAllowed = "move";
+                          }}
+                          onDragOver={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            e.dataTransfer.dropEffect = "move";
+                            if (draggedPlaylistId && draggedPlaylistId !== pl.id) {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const relX = (e.clientX - rect.left) / rect.width;
+                              // In RTL layout: right half (relX > 0.5) is before, left half (relX <= 0.5) is after
+                              const pos = relX > 0.5 ? "before" : "after";
+                              if (dragOverPlaylistId !== pl.id || dragOverPosition !== pos) {
+                                setDragOverPlaylistId(pl.id);
+                                setDragOverPosition(pos);
+                              }
+                            }
+                          }}
+                          onDragEnter={(e) => {
+                            e.preventDefault();
+                            if (draggedPlaylistId && draggedPlaylistId !== pl.id) {
+                              setDragOverPlaylistId(pl.id);
+                            }
+                          }}
+                          onDragLeave={(e) => {
+                            if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                            if (dragOverPlaylistId === pl.id) {
+                              setDragOverPlaylistId(null);
+                            }
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (draggedPlaylistId && draggedPlaylistId !== pl.id) {
+                              handleReorderPlaylists(draggedPlaylistId, pl.id, dragOverPosition);
+                            }
+                            setDraggedPlaylistId(null);
+                            setDragOverPlaylistId(null);
+                            setTimeout(() => {
+                              isDraggingTabRef.current = false;
+                            }, 150);
+                          }}
+                          onDragEnd={() => {
+                            setDraggedPlaylistId(null);
+                            setDragOverPlaylistId(null);
+                            setTimeout(() => {
+                              isDraggingTabRef.current = false;
+                            }, 150);
+                          }}
+                          onClick={() => {
+                            if (isDraggingTabRef.current) return;
+                            handleSwitchPlaylist(pl.id);
+                          }}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              handleSwitchPlaylist(pl.id);
+                            }
+                          }}
+                          className={`group relative flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-all shrink-0 cursor-grab active:cursor-grabbing border select-none ${
+                            isDragged
+                              ? "opacity-40 scale-95 border-amber-400 border-dashed bg-amber-950/40 ring-2 ring-amber-400/80 shadow-2xl"
+                              : isOver
+                                ? "border-amber-400 bg-amber-950/30 ring-2 ring-amber-400/50 scale-102"
+                                : isCurrent
+                                  ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-400 shadow-md ring-1 ring-indigo-400/50 font-black scale-102"
+                                  : "bg-slate-950/80 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800 hover:border-slate-700 font-bold"
+                          }`}
+                          title={`اضغط واسحب بالماوس لتحريك "${pl.name}" أفقياً بين القوائم، أو انقر للتبديل إليها (${count} عنصر)`}
+                        >
+                          {/* Drag handle icon */}
+                          <MoveHorizontalIcon className="w-3 h-3 text-slate-500 group-hover:text-amber-300 opacity-60 group-hover:opacity-100 transition-opacity shrink-0 cursor-grab active:cursor-grabbing" />
+
+                          <span className="truncate max-w-[130px]">{pl.name}</span>
+
+                          <span
+                            className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-black ${
+                              isCurrent ? "bg-amber-400 text-slate-950 shadow-sm" : "bg-slate-800 text-slate-400"
+                            }`}
+                          >
+                            {count}
+                          </span>
+                        </div>
+
+                        {/* Insertion indicator after this tab in RTL (left edge) */}
+                        {isOver && dragOverPosition === "after" && (
+                          <div className="w-1.5 h-6 bg-gradient-to-b from-amber-400 to-amber-500 rounded-full shadow-[0_0_10px_rgba(251,191,36,0.95)] animate-pulse shrink-0 -mx-0.5 z-20" />
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+
+                  {/* Quick Add Playlist Button */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewPlaylistName("");
+                      setNewPlaylistCopyFromCurrent(false);
+                      setIsNewPlaylistModalOpen(true);
+                    }}
+                    className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-amber-300 hover:text-amber-200 border border-slate-700 hover:border-amber-400 text-xs font-bold transition-all shrink-0 cursor-pointer shadow-sm active:scale-95"
+                    title="إنشاء قائمة تشغيل جديدة +"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span className="text-[11px] font-black">جديدة</span>
+                  </button>
+                </div>
               </div>
 
               {/* Collapsible Tools & Functions Section (Hidden by default to save space for items) */}
@@ -4076,8 +4327,34 @@ export function CinemaScreenModal({
                 <div className="flex flex-col gap-2 pt-1 border-t border-indigo-500/20 animate-in slide-in-from-top-2 duration-150">
                   {/* Playlist Management Actions */}
                   <div className="flex items-center justify-between gap-1">
-                    <span className="text-[11px] font-bold text-slate-300">إدارة القائمة الحالية:</span>
+                    <span className="text-[11px] font-bold text-slate-300">إدارة وترتيب القائمة الحالية:</span>
                     <div className="flex items-center gap-1 shrink-0">
+                      {/* Horizontal Move Direction Buttons */}
+                      {playlists.length > 1 && (
+                        <div className="flex items-center gap-0.5 border-l border-slate-700 pl-1.5 ml-1">
+                          <button
+                            type="button"
+                            onClick={() => handleMovePlaylistDirection(activePlaylist.id, "prev")}
+                            disabled={playlists.findIndex((p) => p.id === activePlaylist.id) === 0}
+                            className="flex items-center gap-0.5 px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-300 border border-slate-700 text-xs transition-colors disabled:opacity-25 cursor-pointer"
+                            title="تحريك القائمة يميناً في الترتيب الأفقي ◀"
+                          >
+                            <ArrowRightIcon className="w-3.5 h-3.5" />
+                            <span className="text-[10px] font-bold">يمين</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleMovePlaylistDirection(activePlaylist.id, "next")}
+                            disabled={playlists.findIndex((p) => p.id === activePlaylist.id) === playlists.length - 1}
+                            className="flex items-center gap-0.5 px-1.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-amber-300 border border-slate-700 text-xs transition-colors disabled:opacity-25 cursor-pointer"
+                            title="تحريك القائمة يساراً في الترتيب الأفقي ▶"
+                          >
+                            <span className="text-[10px] font-bold">يسار</span>
+                            <ArrowLeftIcon className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => {
@@ -4771,7 +5048,7 @@ export function CinemaScreenModal({
               {/* Player Canvas Area */}
               <div className="flex-1 relative flex items-center justify-center bg-black overflow-hidden group/player">
                 {/* 1. Direct Video Element */}
-                {playbackMode === "direct" ? (
+                {playbackMode === "direct" && !isYouTubeStream ? (
                   <video
                     ref={videoRef}
                     className="w-full h-full object-contain z-10"
@@ -4831,24 +5108,24 @@ export function CinemaScreenModal({
                     )}
                   </video>
                 ) : (
-                  /* 2. Sandboxed Safe Embed Iframe */
+                  /* 2. Safe Embed Iframe */
                   <iframe
                     key={`${currentEmbedUrl || currentMovie?.id || "embed"}-${reloadCounter}`}
                     src={currentEmbedUrl}
                     title={currentTitle}
                     className="w-full h-full border-0 z-10 bg-black"
                     sandbox={
-                      currentEmbedUrl.includes("youtube") || currentEmbedUrl.includes("youtu.be")
+                      isYouTubeStream
                         ? undefined
                         : "allow-scripts allow-same-origin allow-forms allow-presentation allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
                     }
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
-                    allowFullScreen
-                    referrerPolicy={
-                      currentEmbedUrl.includes("youtube") || currentEmbedUrl.includes("youtu.be")
-                        ? "strict-origin-when-cross-origin"
-                        : "no-referrer-when-downgrade"
+                    allow={
+                      isYouTubeStream
+                        ? "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
+                        : "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen; cross-origin-isolated"
                     }
+                    allowFullScreen
+                    referrerPolicy={isYouTubeStream ? "strict-origin-when-cross-origin" : "no-referrer-when-downgrade"}
                     onLoad={() => {
                       hasPlaybackStartedRef.current = true;
                       setIsPlaying(true);
@@ -4861,8 +5138,7 @@ export function CinemaScreenModal({
                     onError={() => {
                       console.warn("[Cinema Player] Iframe error occurred");
                       if (
-                        !currentEmbedUrl.includes("youtube") &&
-                        !currentEmbedUrl.includes("youtu.be") &&
+                        !isYouTubeStream &&
                         !isCheckingPlaylist &&
                         !hasPlaybackStartedRef.current
                       ) {
@@ -4973,36 +5249,63 @@ export function CinemaScreenModal({
                 >
                   {/* Mode switcher: Direct HLS vs Embed */}
                   <div className="flex items-center gap-1 bg-slate-900/90 p-0.5 rounded-lg border border-slate-750">
-                    <button
-                      type="button"
-                      onClick={() => handleSelectMode("direct")}
-                      className={`px-2.5 py-1 rounded-md text-xs font-black transition-all border flex items-center gap-1.5 cursor-pointer ${
-                        playbackMode === "direct"
-                          ? "bg-gradient-to-r from-red-600 via-rose-600 to-red-600 text-white border-red-300 shadow-md shadow-red-600/40 ring-1 ring-red-400"
-                          : "bg-slate-950/80 hover:bg-slate-800 text-slate-400 border-transparent"
-                      }`}
-                      title="تشغيل عبر مشغل HLS/MP4 المباشر النقي بدون إعلانات"
-                    >
-                      <span>⚡ HLS مباشر</span>
-                      {playbackMode === "direct" && (
-                        <CheckIcon className="w-3 h-3 text-white stroke-[3]" />
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSelectMode("embed")}
-                      className={`px-2.5 py-1 rounded-md text-xs font-black transition-all border flex items-center gap-1.5 cursor-pointer ${
-                        playbackMode === "embed"
-                          ? "bg-gradient-to-r from-red-600 via-rose-600 to-red-600 text-white border-red-300 shadow-md shadow-red-600/40 ring-1 ring-red-400"
-                          : "bg-slate-950/80 hover:bg-slate-800 text-slate-400 border-transparent"
-                      }`}
-                      title="تشغيل عبر سيرفر التضمين Embed المحمي"
-                    >
-                      <span>🌐 سيرفر Embed</span>
-                      {playbackMode === "embed" && (
-                        <CheckIcon className="w-3 h-3 text-white stroke-[3]" />
-                      )}
-                    </button>
+                    {isYouTubeStream ? (
+                      <div className="flex items-center gap-1.5">
+                        <div className="px-2.5 py-1 rounded-md text-xs font-black bg-red-600/25 text-red-300 border border-red-500/35 flex items-center gap-1.5 shadow-sm">
+                          <span>🎬 مشغل يوتيوب المعتمد</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={openInPopoutWindow}
+                          className="px-2.5 py-1 rounded-md text-xs font-black bg-amber-500 hover:bg-amber-400 text-slate-950 flex items-center gap-1.5 shadow-md active:scale-95 cursor-pointer transition-all"
+                          title="تشغيل في نافذة مستقلة لتجاوز أي حظر أو مطالبة بتسجيل الدخول من يوتيوب"
+                        >
+                          <span>⚡ تشغيل نافذة مستقلة (بدون حظر) ↗</span>
+                        </button>
+                        <a
+                          href={currentStream?.directUrl || (extractYouTubeId(currentEmbedUrl || currentMovie?.originalUrl) ? `https://www.youtube.com/watch?v=${extractYouTubeId(currentEmbedUrl || currentMovie?.originalUrl)}` : currentMovie?.originalUrl)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2 py-1 rounded-md text-xs font-bold bg-slate-800 hover:bg-slate-750 text-slate-200 hover:text-white flex items-center gap-1 border border-slate-700 transition-all cursor-pointer"
+                          title="المشاهدة مباشرة في موقع وتطبيق يوتيوب"
+                        >
+                          <span>يوتيوب ↗</span>
+                        </a>
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectMode("direct")}
+                          className={`px-2.5 py-1 rounded-md text-xs font-black transition-all border flex items-center gap-1.5 cursor-pointer ${
+                            playbackMode === "direct"
+                              ? "bg-gradient-to-r from-red-600 via-rose-600 to-red-600 text-white border-red-300 shadow-md shadow-red-600/40 ring-1 ring-red-400"
+                              : "bg-slate-950/80 hover:bg-slate-800 text-slate-400 border-transparent"
+                          }`}
+                          title="تشغيل عبر مشغل HLS/MP4 المباشر النقي بدون إعلانات"
+                        >
+                          <span>⚡ HLS مباشر</span>
+                          {playbackMode === "direct" && (
+                            <CheckIcon className="w-3 h-3 text-white stroke-[3]" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectMode("embed")}
+                          className={`px-2.5 py-1 rounded-md text-xs font-black transition-all border flex items-center gap-1.5 cursor-pointer ${
+                            playbackMode === "embed"
+                              ? "bg-gradient-to-r from-red-600 via-rose-600 to-red-600 text-white border-red-300 shadow-md shadow-red-600/40 ring-1 ring-red-400"
+                              : "bg-slate-950/80 hover:bg-slate-800 text-slate-400 border-transparent"
+                          }`}
+                          title="تشغيل عبر سيرفر التضمين Embed المحمي"
+                        >
+                          <span>🌐 سيرفر Embed</span>
+                          {playbackMode === "embed" && (
+                            <CheckIcon className="w-3 h-3 text-white stroke-[3]" />
+                          )}
+                        </button>
+                      </>
+                    )}
                   </div>
 
                   {/* Open in external window button */}

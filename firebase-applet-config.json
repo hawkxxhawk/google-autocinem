@@ -1,12 +1,12 @@
 {
-  "projectId": "koktilxaflam",
-  "appId": "1:949683163843:web:711af9bbe0863177b38876",
-  "apiKey": "AIzaSyAZbhOb4QhIozsGrg7quxmSA1X3OP66Csg",
-  "authDomain": "koktilxaflam.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-remixremixfinala-e85d453f-91e8-4535-88f6-2a50c6006982",
-  "storageBucket": "koktilxaflam.firebasestorage.app",
-  "messagingSenderId": "949683163843",
+  "projectId": "gen-lang-client-0740151188",
+  "appId": "1:566483687070:web:614cc552ca0457fec3cd8f",
+  "apiKey": "AIzaSyBpW2L1-YNTFRnFz9sq-X6O3dk8BNhxEPk",
+  "authDomain": "gen-lang-client-0740151188.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-remixhautocinema-9c766fef-38f7-4011-bf3b-3b78f8138241",
+  "storageBucket": "gen-lang-client-0740151188.firebasestorage.app",
+  "messagingSenderId": "566483687070",
   "measurementId": "",
-  "oAuthClientId": "949683163843-bpp3mus081gfni42umibe43p1lhmi64c.apps.googleusercontent.com",
+  "oAuthClientId": "566483687070-fos2vcneebq4f4pqlubi2bm8n2iphk78.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

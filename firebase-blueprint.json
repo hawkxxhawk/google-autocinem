@@ -266,6 +266,10 @@
     "/syncMeta/{metaId}": {
       "schema": "AppData",
       "description": "Synchronization metadata"
+    },
+    "/repoMovies/{docId}": {
+      "schema": "AppData",
+      "description": "Partitioned repository movies documents"
     }
   }
 }

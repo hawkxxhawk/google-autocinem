@@ -47,6 +47,68 @@ export const DEFAULT_CINEMA_PLAYLISTS: DefaultCinemaPlaylistGroup[] = [
     "name": "أساسية",
     "items": [
       {
+        "id": "pl-yt-xu0xx44X42I-halfout",
+        "title": "فيلم الهلفوت - عادل إمام وإلهام شاهين",
+        "movieTitle": "فيلم الهلفوت - عادل إمام وإلهام شاهين",
+        "originalUrl": "https://www.youtube.com/watch?v=xu0xx44X42I",
+        "url": "/api/youtube-player?v=xu0xx44X42I&title=%D9%81%D9%8A%D9%84%D9%85%20%D8%A7%D9%84%D9%87%D9%84%D9%81%D9%88%D8%AA&autoplay=1",
+        "directUrl": "https://www.youtube.com/watch?v=xu0xx44X42I",
+        "streamUrl": "/api/youtube-player?v=xu0xx44X42I&title=%D9%81%D9%8A%D9%84%D9%85%20%D8%A7%D9%84%D9%87%D9%84%D9%81%D9%88%D8%AA&autoplay=1",
+        "category": "يوتيوب",
+        "preferredMode": "embed",
+        "selectedServer": "YouTube 1080p FHD (المشغل الافتراضي)",
+        "selectedQuality": "1080p FHD",
+        "selectedType": "embed",
+        "posterUrl": "https://i.ytimg.com/vi/xu0xx44X42I/maxresdefault.jpg",
+        "addedAt": "2026-11-08T12:00:00.000Z",
+        "selectedStream": {
+          "id": "yt-stream-xu0xx44X42I-fhd",
+          "server": "YouTube 1080p FHD (المشغل الافتراضي)",
+          "quality": "1080p FHD",
+          "type": "embed",
+          "url": "/api/youtube-player?v=xu0xx44X42I&title=%D9%81%D9%8A%D9%84%D9%85%20%D8%A7%D9%84%D9%87%D9%84%D9%81%D9%88%D8%AA&autoplay=1",
+          "directUrl": "https://www.youtube.com/watch?v=xu0xx44X42I",
+          "preferred": true,
+          "isYouTube": true,
+          "youtubeId": "xu0xx44X42I"
+        },
+        "allStreams": [
+          {
+            "id": "yt-stream-xu0xx44X42I-fhd",
+            "server": "YouTube 1080p FHD (المشغل الافتراضي)",
+            "quality": "1080p FHD",
+            "type": "embed",
+            "url": "/api/youtube-player?v=xu0xx44X42I&title=%D9%81%D9%8A%D9%84%D9%85%20%D8%A7%D9%84%D9%87%D9%84%D9%81%D9%88%D8%AA&autoplay=1",
+            "directUrl": "https://www.youtube.com/watch?v=xu0xx44X42I",
+            "preferred": true,
+            "isYouTube": true,
+            "youtubeId": "xu0xx44X42I"
+          },
+          {
+            "id": "yt-stream-xu0xx44X42I-embed",
+            "server": "YouTube Embed Player (بدون كوكيز)",
+            "quality": "720p HD",
+            "type": "embed",
+            "url": "https://www.youtube-nocookie.com/embed/xu0xx44X42I?enablejsapi=1&playsinline=1&rel=0&autoplay=1",
+            "directUrl": "https://www.youtube-nocookie.com/embed/xu0xx44X42I",
+            "preferred": false,
+            "isYouTube": true,
+            "youtubeId": "xu0xx44X42I"
+          },
+          {
+            "id": "yt-stream-xu0xx44X42I-standard",
+            "server": "YouTube Official Embed",
+            "quality": "480p SD",
+            "type": "embed",
+            "url": "https://www.youtube.com/embed/xu0xx44X42I?enablejsapi=1&playsinline=1&rel=0",
+            "directUrl": "https://www.youtube.com/embed/xu0xx44X42I",
+            "preferred": false,
+            "isYouTube": true,
+            "youtubeId": "xu0xx44X42I"
+          }
+        ]
+      },
+      {
       "title": "HD - مترجم The Shape of Water 2017 فيلم",
       "url": "/api/stream-proxy?url=https%3A%2F%2Fs1.egybestvid.com%2Fhls2%2F02%2F00001%2F93b2h0zwdvfo_n%2Findex-v1-a1.m3u8%3Ft%3Dd0tfEJEQaFchSynUG1GdCDSvUPhh74IyG6RIjX1sI5k%26s%3D1794055318%26e%3D50400%26v%3D44088963%26i%3D0.3%26sp%3D0&ref=https%3A%2F%2Fegybestvid.com%2Fembed-93b2h0zwdvfo.html",
       "selectedType": "hls",

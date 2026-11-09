@@ -13,6 +13,7 @@ import {
 import { FirebaseDatabaseModal } from "./components/FirebaseDatabaseModal";
 import { DbPasswordModal } from "./components/DbPasswordModal";
 import { CinemaScreenModal } from "./components/CinemaScreenModal";
+import { BatchActionModal } from "./components/BatchActionModal";
 import { DraggableUnsavedBanner } from "./components/DraggableUnsavedBanner";
 import { CloudUploadIndicator } from "./components/CloudUploadIndicator";
 import {
@@ -41,6 +42,8 @@ import {
   saveStreamPreferenceToDb,
   saveAllStreamPreferencesToDb,
   saveAllCustomMoviesToDb,
+  saveAllRepositoriesAndMoviesToDb,
+  fetchAllRepositoryMoviesFromDb,
   fetchStreamPreferencesFromDb,
   notifyUploadStart,
   notifyUploadProgress,
@@ -597,6 +600,54 @@ const Pt = "all-favorites",
       orderIndex: 18,
       updatedAt: "2026-11-03T21:46:39.601Z",
     },
+    {
+      id: "folder-default",
+      name: "مستودع مستورد (ault)",
+      description: "مستودع مستورد تلقائي لحفظ العناصر المرتبطة به",
+      color: "#8E24AA",
+      sortBy: "title",
+      isFolderHidden: !1,
+      includeInAllFavorites: !0,
+      zone: "green",
+      orderIndex: 19,
+      updatedAt: "2026-11-03T21:46:39.601Z",
+    },
+    {
+      id: "folder-1794084001509",
+      name: "افلام  يوتيوب 1",
+      description: "Collection imported on 11/7/2026",
+      color: "#8E24AA",
+      sortBy: "title",
+      isFolderHidden: !1,
+      includeInAllFavorites: !0,
+      zone: "green",
+      orderIndex: 20,
+      updatedAt: "2026-11-07T12:00:00.000Z",
+    },
+    {
+      id: "folder-1794086250238",
+      name: "افلام يوتيوب  2",
+      description: "Collection imported on 11/7/2026",
+      color: "#8E24AA",
+      sortBy: "title",
+      isFolderHidden: !1,
+      includeInAllFavorites: !0,
+      zone: "green",
+      orderIndex: 21,
+      updatedAt: "2026-11-07T12:00:00.000Z",
+    },
+    {
+      id: "folder-1794086369973",
+      name: "افلام يوتيوب  3",
+      description: "Collection imported on 11/7/2026",
+      color: "#8E24AA",
+      sortBy: "title",
+      isFolderHidden: !1,
+      includeInAllFavorites: !0,
+      zone: "green",
+      orderIndex: 22,
+      updatedAt: "2026-11-07T12:00:00.000Z",
+    },
   ],
   ml = [
     {
@@ -851,14 +902,78 @@ function gl(l) {
     );
   }
 }
+function cleanMovieApiUrl(m: any) {
+  if (!m || !m.url || typeof m.url !== "string" || !m.url.includes("/api/")) return m;
+  const isDirect = (u?: string) =>
+    !!u &&
+    (u.includes(".m3u8") ||
+      u.includes("/hls/") ||
+      u.startsWith("/api/stream-proxy") ||
+      u.includes(".mp4") ||
+      u.includes(".ts"));
+  let clean = "";
+  if (
+    m.originalUrl &&
+    typeof m.originalUrl === "string" &&
+    m.originalUrl.startsWith("http") &&
+    !m.originalUrl.includes("/api/") &&
+    !isDirect(m.originalUrl)
+  ) {
+    clean = m.originalUrl.trim();
+  } else if (
+    m.embedUrl &&
+    typeof m.embedUrl === "string" &&
+    m.embedUrl.startsWith("http") &&
+    !m.embedUrl.includes("/api/") &&
+    !isDirect(m.embedUrl)
+  ) {
+    clean = m.embedUrl.trim();
+  } else {
+    for (const c of [m.originalUrl, m.embedUrl, m.url]) {
+      if (!c || typeof c !== "string") continue;
+      const refMatch = c.match(/[?&]ref=([^&]+)/i);
+      if (refMatch && refMatch[1]) {
+        try {
+          const dec = decodeURIComponent(refMatch[1]);
+          if (dec.startsWith("http") && !dec.includes("/api/") && !isDirect(dec)) {
+            clean = dec;
+            break;
+          }
+        } catch (_) {}
+      }
+      const urlMatch = c.match(/[?&]url=([^&]+)/i);
+      if (urlMatch && urlMatch[1]) {
+        try {
+          const dec = decodeURIComponent(urlMatch[1]);
+          if (dec.startsWith("http") && !dec.includes("/api/")) {
+            clean = dec;
+            break;
+          }
+        } catch (_) {}
+      }
+    }
+  }
+  if (clean && !clean.includes("/api/")) {
+    return { ...m, originalUrl: m.originalUrl || clean, url: clean };
+  }
+  return m;
+}
+
 function Yn() {
   if (si && Array.isArray(si)) return si;
   try {
     const l = localStorage.getItem(ko);
-    if (!l || l === "__INDEXEDDB_STORED__")
-      return si && Array.isArray(si) ? si : ml;
+    if (!l || l === "__INDEXEDDB_STORED__") {
+      const fallback = si && Array.isArray(si) ? si : ml;
+      return Array.isArray(fallback) ? fallback.map(cleanMovieApiUrl) : fallback;
+    }
     const e = JSON.parse(l);
-    return Array.isArray(e) ? ((si = e), e) : ml;
+    if (Array.isArray(e)) {
+      const sanitized = e.map(cleanMovieApiUrl);
+      si = sanitized;
+      return sanitized;
+    }
+    return ml;
   } catch (l) {
     return (
       console.error("Error loading movies from localStorage", l),
@@ -2558,8 +2673,21 @@ function ou(l) {
       );
     i = i.map((y) => {
       const v = y.parentFolderId || y.folderId,
-        S = y.isFavorite === !0,
-        E = !v || !u.has(v) || v === Pt ? h : v;
+        S = y.isFavorite === !0;
+      let E = v && v !== Pt ? v : h;
+      if (v && v !== Pt && !u.has(v)) {
+        u.add(v);
+        t.push({
+          id: v,
+          name: v.startsWith("folder-") ? `مستودع (${v.slice(-4)})` : v,
+          description: "مستودع تلقائي",
+          color: "#8E24AA",
+          sortBy: "title",
+          isFolderHidden: !1,
+          includeInAllFavorites: !0,
+          zone: "green",
+        });
+      }
       let C = v === Pt ? !0 : S;
       const L = m.has(E),
         A = g.has(E),
@@ -2740,7 +2868,9 @@ function findMatchingStream(l, e) {
 }
 function getStreamQualityScore(quality) {
   if (!quality) return 720;
-  const q = String(quality).toLowerCase();
+  const q = String(quality).toLowerCase().trim();
+  if (/cinema/i.test(q)) return 1100;
+  if (/app|تطبيق/i.test(q)) return 2000;
   const match = q.match(/(\d{3,4})p?/);
   if (match) {
     const val = parseInt(match[1], 10);
@@ -2750,6 +2880,7 @@ function getStreamQualityScore(quality) {
   if (/2k|1440/i.test(q)) return 1440;
   if (/1080|fhd|full\s*hd/i.test(q)) return 1080;
   if (/720|hd/i.test(q)) return 720;
+  if (/480|sd|متوسط/i.test(q)) return 480;
   if (/360|344|منخفض|ضعيف|low/i.test(q)) return 360;
   if (/240/i.test(q)) return 240;
   return 720;
@@ -2770,11 +2901,22 @@ function sortStreamsAscending(streams) {
     deduped.push(s);
   }
   return [...deduped].sort((a, b) => {
+    // 0. Preferred streams always sort first
+    if (a?.preferred && !b?.preferred) return -1;
+    if (!a?.preferred && b?.preferred) return 1;
+
     const scoreA = getStreamQualityScore(a?.quality);
     const scoreB = getStreamQualityScore(b?.quality);
     if (scoreA !== scoreB) {
       return scoreA - scoreB;
     }
+
+    // 1b. Official YouTube player bridge
+    const isYtBridgeA = a?.url?.includes('/api/youtube-player') || a?.directUrl?.includes('/api/youtube-player');
+    const isYtBridgeB = b?.url?.includes('/api/youtube-player') || b?.directUrl?.includes('/api/youtube-player');
+    if (isYtBridgeA && !isYtBridgeB) return -1;
+    if (!isYtBridgeA && isYtBridgeB) return 1;
+
     const isDirectA = a?.type === "hls" || a?.type === "mp4";
     const isDirectB = b?.type === "hls" || b?.type === "mp4";
     if (isDirectA && !isDirectB) return -1;
@@ -2788,6 +2930,19 @@ function pickDefaultQualityStream(streams, userPref) {
     const matched = findMatchingStream(streams, userPref);
     if (matched) return matched;
   }
+  // Check YouTube streams first - always prioritize preferred YouTube stream or YouTube 1080p player
+  const ytPreferred = streams.find(
+    (s) =>
+      s &&
+      s.preferred &&
+      (s.isYouTube ||
+        s?.url?.includes('/api/youtube-player') ||
+        s?.directUrl?.includes('/api/youtube-player'))
+  );
+  if (ytPreferred) return ytPreferred;
+
+  const preferred = streams.find((s) => s && s.preferred);
+  if (preferred) return preferred;
   const priorityScores = [360, 480, 720, 1080, 1440, 2160, 240];
   for (const score of priorityScores) {
     const matching = streams.filter((s) => getStreamQualityScore(s?.quality) === score);
@@ -2825,21 +2980,46 @@ function isMovieInCinemaPlaylist(movie, playlist) {
     return false;
   });
 }
-function S2(l, e) {
+function S2(l, e, folderOrderList = []) {
   let t = [];
-  e.type === "folder" && e.id
-    ? (t = l.filter((u) => u.parentFolderId === e.id && !u.isHidden))
-    : e.type === "favorite_section" && e.id
-      ? (t = l.filter(
-          (u) =>
-            u.isFavorite &&
-            (u.favoriteColor === e.id ||
-              (e.id === "yellow" && !u.favoriteColor)) &&
-            !u.isHidden,
-        ))
-      : e.type === "all_favorites"
-        ? (t = l.filter((u) => u.isFavorite && !u.isHidden))
-        : (t = l.filter((u) => !u.isHidden));
+  const folderIndexMap = new Map();
+  if (Array.isArray(folderOrderList)) {
+    folderOrderList.forEach((f, idx) => {
+      if (f && f.id) folderIndexMap.set(f.id, idx);
+    });
+  }
+
+  if (e.type === "multi_folders" || (e.type === "folder" && Array.isArray(e.folderIds) && e.folderIds.length > 0)) {
+    const idsSet = new Set(e.folderIds || [e.id]);
+    t = l.filter((u) => idsSet.has(u.parentFolderId) && !u.isHidden);
+  } else if (e.type === "folder" && e.id) {
+    t = l.filter((u) => u.parentFolderId === e.id && !u.isHidden);
+  } else if (e.type === "favorite_section" && e.id) {
+    t = l.filter(
+      (u) =>
+        u.isFavorite &&
+        (u.favoriteColor === e.id ||
+          (e.id === "yellow" && !u.favoriteColor)) &&
+        !u.isHidden,
+    );
+  } else if (e.type === "all_favorites") {
+    t = l.filter((u) => u.isFavorite && !u.isHidden);
+  } else {
+    t = l.filter((u) => !u.isHidden);
+  }
+
+  // Sort target movies primarily by parent folder order in folderOrderList!
+  // This guarantees that when grouping movies with identical URLs across multiple folders,
+  // the copy from the repository that comes FIRST in order will ALWAYS be u[0] (keptMovie),
+  // and all subsequent duplicate copies in other repositories will be in u.slice(1) (to delete).
+  if (folderIndexMap.size > 0) {
+    t.sort((a, b) => {
+      const idxA = folderIndexMap.has(a.parentFolderId) ? folderIndexMap.get(a.parentFolderId) : 999999;
+      const idxB = folderIndexMap.has(b.parentFolderId) ? folderIndexMap.get(b.parentFolderId) : 999999;
+      return idxA - idxB;
+    });
+  }
+
   const i = (u) => {
       const h = (u.url || u.embedUrl || "").trim().toLowerCase();
       return h ? h.replace(/\/+$/, "") : "";
@@ -2954,6 +3134,21 @@ const E2 = ({
         });
         return counts;
       }, [activeFolders, movieCountMap]),
+      [selectedFolderIds, setSelectedFolderIds] = q.useState<Set<string>>(() => {
+        const initial = new Set<string>();
+        const valid = (t || []).filter((H) => H.id !== Pt && !H.isFolderHidden);
+        if (valid.length > 0) {
+          initial.add(valid[0].id);
+        }
+        return initial;
+      }),
+      [dedupFolderSearch, setDedupFolderSearch] = q.useState(""),
+      [dedupFolderZoneFilter, setDedupFolderZoneFilter] = q.useState<"all" | RepoZoneId>("all"),
+      folderMap = q.useMemo(() => new Map((t || []).map((H) => [H.id, H])), [t]),
+      selectedFoldersList = q.useMemo(() => {
+        return (t || []).filter((H) => selectedFolderIds.has(H.id) && H.id !== Pt);
+      }, [t, selectedFolderIds]),
+      firstSelectedFolder = selectedFoldersList[0] || null,
       filteredSettingsFolders = q.useMemo(() => {
         const filtered = activeFolders.filter((H) => {
           if (settingsRepoZoneFilter !== "all" && getFolderZone(H) !== settingsRepoZoneFilter) return false;
@@ -2981,6 +3176,306 @@ const E2 = ({
 
         return filtered;
       }, [activeFolders, settingsRepoZoneFilter, settingsRepoSearch]),
+      [singleExportFolderId, setSingleExportFolderId] = q.useState<string>(() => (t && t.length > 0 ? t[0].id : "")),
+      [singleExportSearch, setSingleExportSearch] = q.useState<string>(""),
+      [singleExportZoneFilter, setSingleExportZoneFilter] = q.useState<"all" | RepoZoneId>("all"),
+      [lastExportNotice, setLastExportNotice] = q.useState<string | null>(null),
+      [isExportingBatch, setIsExportingBatch] = q.useState<boolean>(false),
+      handleExportSingleRepo = (folderId: string) => {
+        const targetFolder = (t || []).find((f: any) => f.id === folderId);
+        if (!targetFolder) return;
+
+        const folderZone = getFolderZone(targetFolder);
+        const folderObj = {
+          ...targetFolder,
+          zone: folderZone,
+        };
+
+        const folderMovies = (i || []).filter(
+          (m: any) => m && m.parentFolderId === folderId && !m.isHidden
+        );
+
+        let streamPrefs: Record<string, any> = {};
+        try {
+          streamPrefs = getStreamPreferences();
+        } catch {}
+
+        const processedMovies = folderMovies.map((m: any) => {
+          let updated = { ...m };
+          const pref = streamPrefs[m.id];
+          if (pref) {
+            if (typeof pref.selectedServerIndex === "number") updated.selectedServerIndex = pref.selectedServerIndex;
+            if (pref.selectedQuality) updated.selectedQuality = pref.selectedQuality;
+            if (pref.streamUrl) updated.preferredStreamUrl = pref.streamUrl;
+          }
+          return updated;
+        });
+
+        const exportPayload = {
+          folders: [folderObj],
+          movies: processedMovies,
+          exportedAt: new Date().toISOString(),
+          exportType: "single_repository",
+          repositoryName: targetFolder.name,
+          repositoryId: targetFolder.id,
+          zone: folderZone,
+          totalMovies: processedMovies.length,
+        };
+
+        const safeName = (targetFolder.name || "repo").replace(/[/\\?%*:|"<>]/g, "_").trim();
+        const fileName = `autocinema_repo_${safeName}_${targetFolder.id}.json`;
+
+        const jsonStr = JSON.stringify(exportPayload, null, 2);
+        const blob = new Blob([jsonStr], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        setLastExportNotice(`✓ تم تصدير مستودع "${targetFolder.name}" بنجاح (${processedMovies.length} عنصر) بصيغة JSON متوافقة.`);
+        setTimeout(() => setLastExportNotice(null), 5000);
+      },
+      handleExportAllReposIndividually = async () => {
+        if (!activeFolders || activeFolders.length === 0) return;
+        setIsExportingBatch(true);
+        try {
+          for (let idx = 0; idx < activeFolders.length; idx++) {
+            const f = activeFolders[idx];
+            handleExportSingleRepo(f.id);
+            await new Promise((resolve) => setTimeout(resolve, 350));
+          }
+          setLastExportNotice(`✓ تم تصدير كافة المستودعات بنجاح (${activeFolders.length} ملف JSON منفصل)!`);
+          setTimeout(() => setLastExportNotice(null), 6000);
+        } catch (err: any) {
+          setLastExportNotice(`حدث خطأ أثناء التصدير: ${err?.message || err}`);
+        } finally {
+          setIsExportingBatch(false);
+        }
+      },
+      singleExportFilteredFolders = q.useMemo(() => {
+        return activeFolders.filter((f) => {
+          if (singleExportZoneFilter !== "all" && getFolderZone(f) !== singleExportZoneFilter) return false;
+          if (!singleExportSearch.trim()) return true;
+          const query = singleExportSearch.toLowerCase();
+          return (
+            (f.name && f.name.toLowerCase().includes(query)) ||
+            (f.description && f.description.toLowerCase().includes(query))
+          );
+        });
+      }, [activeFolders, singleExportZoneFilter, singleExportSearch]),
+
+      // FILTER & DEDUPLICATION / LINK CHECKER SUB-TAB STATE
+      [filterSubTab, setFilterSubTab] = q.useState<"dedup" | "broken_links">("dedup"),
+      [confirmDeleteDialog, setConfirmDeleteDialog] = q.useState<{
+        isOpen: boolean;
+        title: string;
+        subtitle: string;
+        count: number;
+        details?: string;
+        onConfirm: () => void;
+      } | null>(null),
+
+      // LINK CHECKER & DEAD / EMPTY PAGE INSPECTOR STATE
+      [checkerTargetFolderId, setCheckerTargetFolderId] = q.useState<string>(() => (t && t.length > 0 ? t[0].id : "all")),
+      [checkerMode, setCheckerMode] = q.useState<"youtube_only" | "all_links">("youtube_only"),
+      [isScanningLinks, setIsScanningLinks] = q.useState<boolean>(false),
+      [scanProgress, setScanProgress] = q.useState<{ current: number; total: number; percent: number; currentItemName: string }>({
+        current: 0,
+        total: 0,
+        percent: 0,
+        currentItemName: "",
+      }),
+      [scanHealthyCount, setScanHealthyCount] = q.useState<number>(0),
+      [brokenMoviesList, setBrokenMoviesList] = q.useState<any[]>([]),
+      [selectedBrokenMovieIds, setSelectedBrokenMovieIds] = q.useState<Set<string>>(new Set()),
+      [checkerNotice, setCheckerNotice] = q.useState<string | null>(null),
+      [checkerSearch, setCheckerSearch] = q.useState<string>(""),
+      scanAbortRef = q.useRef<boolean>(false),
+
+      handleStartLinkScan = async () => {
+        let candidateMovies = (i || []).filter((m) => m && !m.isHidden);
+        if (checkerTargetFolderId !== "all") {
+          candidateMovies = candidateMovies.filter((m) => m.parentFolderId === checkerTargetFolderId);
+        }
+
+        if (checkerMode === "youtube_only") {
+          candidateMovies = candidateMovies.filter((m) => {
+            const u = (m.url || m.embedUrl || "").toLowerCase();
+            return u.includes("youtu") || !u.trim();
+          });
+        }
+
+        if (candidateMovies.length === 0) {
+          setCheckerNotice("لا توجد عناصر مطابقة في هذا المستودع للفحص (تأكد من اختيار المستودع الصحيح أو نمط الفحص).");
+          setTimeout(() => setCheckerNotice(null), 5000);
+          return;
+        }
+
+        setIsScanningLinks(true);
+        scanAbortRef.current = false;
+        setScanHealthyCount(0);
+        setBrokenMoviesList([]);
+        setSelectedBrokenMovieIds(new Set());
+        setCheckerNotice(null);
+
+        const total = candidateMovies.length;
+        let processed = 0;
+        let localHealthy = 0;
+        const localBroken: any[] = [];
+        const localSelectedIds = new Set<string>();
+
+        const BATCH_SIZE = 15;
+        try {
+          for (let startIdx = 0; startIdx < total; startIdx += BATCH_SIZE) {
+            if (scanAbortRef.current) {
+              setCheckerNotice("تم إيقاف عملية الفحص بناءً على طلبك.");
+              break;
+            }
+
+            const batch = candidateMovies.slice(startIdx, startIdx + BATCH_SIZE);
+            setScanProgress({
+              current: processed,
+              total,
+              percent: Math.round((processed / total) * 100),
+              currentItemName: batch[0]?.title || "",
+            });
+
+            try {
+              const res = await fetch("/api/check-movie-links-batch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  movies: batch,
+                  checkAllLinks: checkerMode === "all_links",
+                }),
+              });
+
+              if (res.ok) {
+                const data = await res.json();
+                const results = data.results || [];
+                const resMap = new Map(results.map((item: any) => [item.id, item]));
+
+                for (const m of batch) {
+                  const checkRes = resMap.get(m.id);
+                  if (checkRes && checkRes.isBroken) {
+                    const brokenEntry = {
+                      ...m,
+                      reason: checkRes.reason || "unavailable",
+                      reasonDescription: checkRes.description || "صفحة فارغة أو فيديو غير متاح",
+                      status: checkRes.status,
+                      isYouTube: checkRes.isYouTube,
+                    };
+                    localBroken.push(brokenEntry);
+                    localSelectedIds.add(m.id);
+                  } else {
+                    localHealthy++;
+                  }
+                }
+              } else {
+                localHealthy += batch.length;
+              }
+            } catch (batchErr) {
+              console.warn("Batch link check error:", batchErr);
+              localHealthy += batch.length;
+            }
+
+            processed = Math.min(total, startIdx + batch.length);
+            setScanProgress({
+              current: processed,
+              total,
+              percent: Math.round((processed / total) * 100),
+              currentItemName: batch[batch.length - 1]?.title || "",
+            });
+            setScanHealthyCount(localHealthy);
+            setBrokenMoviesList([...localBroken]);
+            setSelectedBrokenMovieIds(new Set(localSelectedIds));
+
+            await new Promise((resolve) => setTimeout(resolve, 60));
+          }
+
+          if (!scanAbortRef.current) {
+            if (localBroken.length === 0) {
+              setCheckerNotice(`✓ اكتمل الفحص بنجاح! جميع العناصر المفحوصة (${total}) سليمة وروابطها نشطة ولا توجد أي صفحات فارغة.`);
+            } else {
+              setCheckerNotice(`⚠️ تم انتهاء الفحص: تم العثور على (${localBroken.length}) عنصر يؤدي إلى صفحة فارغة أو غير متاح.`);
+            }
+          }
+        } catch (err: any) {
+          setCheckerNotice(`حدث خطأ أثناء الفحص: ${err?.message || err}`);
+        } finally {
+          setIsScanningLinks(false);
+        }
+      },
+      handleStopLinkScan = () => {
+        scanAbortRef.current = true;
+        setIsScanningLinks(false);
+      },
+      handleDeleteSelectedBroken = () => {
+        if (selectedBrokenMovieIds.size === 0) return;
+        const count = selectedBrokenMovieIds.size;
+        const folderName = checkerTargetFolderId === "all" ? "كافة المستودعات" : (t.find((f: any) => f.id === checkerTargetFolderId)?.name || "المستودع");
+        setConfirmDeleteDialog({
+          isOpen: true,
+          title: `تأكيد حذف (${count}) عنصر فارغ أو معطوب نهائياً`,
+          subtitle: `المستودع المستهدف: ${folderName}`,
+          count,
+          details: `تم رصد روابط تؤدي إلى صفحة فارغة أو فيديوهات يوتيوب محذوفة/خاصة في (${count}) عنصر. بالضغط على زر التأكيد أدناه سيتم حذفها نهائياً من المستودع وقوائم التشغيل وتحديث قاعدة البيانات فوراً.`,
+          onConfirm: () => {
+            const idsToDelete = Array.from(selectedBrokenMovieIds);
+            if (r) r(idsToDelete);
+
+            const remainingBroken = brokenMoviesList.filter((m) => !selectedBrokenMovieIds.has(m.id));
+            setBrokenMoviesList(remainingBroken);
+            setSelectedBrokenMovieIds(new Set());
+            setConfirmDeleteDialog(null);
+
+            setCheckerNotice(`✓ تم بنجاح حذف (${count}) عنصر فارغ/معطوب من ${folderName}! تم تحديث المستودع.`);
+            setTimeout(() => setCheckerNotice(null), 6000);
+          },
+        });
+      },
+      handleDeleteSingleBroken = (movieId: string, movieTitle: string) => {
+        setConfirmDeleteDialog({
+          isOpen: true,
+          title: `حذف فيلم "${movieTitle}" نهائياً`,
+          subtitle: "حذف عنصر تالف أو يؤدي لصفحة فارغة",
+          count: 1,
+          details: `هل أنت متأكد من حذف الفيلم "${movieTitle}" نهائياً من المستودع وقوائم التشغيل؟`,
+          onConfirm: () => {
+            if (r) r([movieId]);
+
+            setBrokenMoviesList((prev) => prev.filter((m) => m.id !== movieId));
+            setSelectedBrokenMovieIds((prev) => {
+              const next = new Set(prev);
+              next.delete(movieId);
+              return next;
+            });
+            setConfirmDeleteDialog(null);
+            setCheckerNotice(`✓ تم حذف "${movieTitle}" بنجاح.`);
+            setTimeout(() => setCheckerNotice(null), 4000);
+          },
+        });
+      },
+      handleToggleSelectBroken = (movieId: string) => {
+        setSelectedBrokenMovieIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(movieId)) next.delete(movieId);
+          else next.add(movieId);
+          return next;
+        });
+      },
+      handleToggleSelectAllBroken = () => {
+        if (selectedBrokenMovieIds.size === brokenMoviesList.length) {
+          setSelectedBrokenMovieIds(new Set());
+        } else {
+          setSelectedBrokenMovieIds(new Set(brokenMoviesList.map((m) => m.id)));
+        }
+      },
+
       handleSaveGdriveFav = () => {
         if (!settingsGdriveFavUrl.trim()) {
           setSettingsGdriveNotice("يرجى إدخال رابط Google Drive لملف fav.json لحفظه.");
@@ -3083,55 +3578,72 @@ const E2 = ({
         var ge;
         return $ === "folder"
           ? {
-              type: "folder",
-              id: P || ((ge = t[0]) == null ? void 0 : ge.id) || "",
+              type: "multi_folders",
+              folderIds: Array.from(selectedFolderIds),
+              id: selectedFoldersList[0]?.id || "",
             }
           : $ === "favorite_section"
             ? { type: "favorite_section", id: fe }
             : $ === "all_favorites"
               ? { type: "all_favorites" }
               : { type: "all" };
-      }, [$, P, fe, t]),
+      }, [$, selectedFolderIds, selectedFoldersList, fe]),
       {
         targetMovies: J,
         duplicateGroups: re,
         duplicateMovieIds: Ae,
-      } = q.useMemo(() => S2(i, D), [i, D]),
+      } = q.useMemo(() => S2(i, D, t), [i, D, t]),
       be = () => {
         if (Ae.length === 0) return;
         let ge = "";
+        let details = "";
         if ($ === "folder") {
-          const Ue = t.find((le) => le.id === D.id);
-          ge = Ue ? `مستودع "${Ue.name}"` : "المستودع المحدد";
+          if (selectedFoldersList.length === 1) {
+            ge = `مستودع "${selectedFoldersList[0]?.name}"`;
+            details = `• المستودع المحدد: "${selectedFoldersList[0]?.name}"`;
+          } else {
+            ge = `فحص مجمع بين (${selectedFoldersList.length}) مستودعات`;
+            details = `• المستودعات المختارة (${selectedFoldersList.length}): ${selectedFoldersList.map((f, idx) => `[#${idx + 1} ${f.name}]`).join("، ")}
+• المستودع الأول المعتمد للإبقاء: "${firstSelectedFolder?.name}" 👑 (ترتيب #1)
+• سيتم الإبقاء على نسخة واحدة فقط لكل فيلم مكرر بداخل "${firstSelectedFolder?.name}" وحذف باقي النسخ المكررة من المستودعات الأخرى.`;
+          }
         } else if ($ === "favorite_section") {
           const Ue = Os.find((le) => le.id === D.id);
           ge = Ue ? `قسم "${Ue.name}" في All Favorites` : "قسم المفضلة";
-        } else
-          $ === "all_favorites"
-            ? (ge = "مجلد المفضلة العامة (All Favorites)")
-            : (ge = "كافة المستودعات");
-        const Re = `تأكيد التصفية وإزالة المكررات:
-
-• النطاق: ${ge}
-• عدد الأفلام المكررة المراد حذفها: ${Ae.length} فيلم
-• سيتم الإبقاء على نسخة واحدة فقط لكل فيلم يشترك في نفس رابط التشغيل.
-
-هل تريد بالتأكيد المتابعة وحذف النسخ المكررة الآن؟`;
-        window.confirm(Re) &&
-          (r && r(Ae),
-          ie(
-            `✓ تمت التصفية بنجاح! تم حذف (${Ae.length}) فيلم مكرر والابقاء على نسخة واحدة لكل رابط تشغيل في ${ge}.`,
-          ),
-          _e(!1),
-          setTimeout(() => {
-            ie(null);
-          }, 7e3));
+          details = `• القسم: ${ge}`;
+        } else if ($ === "all_favorites") {
+          ge = "مجلد المفضلة العامة (All Favorites)";
+          details = `• النطاق: ${ge}`;
+        } else {
+          ge = "كافة المستودعات";
+          details = `• النطاق: كافة المستودعات في النظام
+• سيتم الإبقاء على نسخة واحدة بداخل المستودع الأول في الترتيب وحذف المكررات من المستودعات التالية.`;
+        }
+        setConfirmDeleteDialog({
+          isOpen: true,
+          title: `تأكيد التصفية وإزالة المكررات (${Ae.length} فيلم)`,
+          subtitle: ge,
+          count: Ae.length,
+          details: `${details}\n• سيتم الإبقاء تلقائياً على نسخة واحدة فقط لكل فيلم يشترك في نفس رابط التشغيل بداخل المستودع الأول في الترتيب وحذف باقي النسخ المكررة (${Ae.length}) نهائياً.`,
+          onConfirm: () => {
+            if (r) r(Ae);
+            ie(
+              `✓ تمت التصفية بنجاح! تم حذف (${Ae.length}) فيلم مكرر والإبقاء على نسخة واحدة لكل فيلم بداخل المستودع الأول في ${ge}.`,
+            );
+            _e(!1);
+            setConfirmDeleteDialog(null);
+            setTimeout(() => {
+              ie(null);
+            }, 7e3);
+          },
+        });
       };
     return l
-      ? c.jsx("div", {
+      ? c.jsxs("div", {
           className:
             "fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto",
-          children: c.jsxs("div", {
+          children: [
+            c.jsxs("div", {
             className:
               "bg-slate-900 border-2 border-purple-500/50 rounded-2xl w-full max-w-4xl shadow-2xl overflow-hidden max-h-[92vh] flex flex-col my-auto text-right dir-rtl",
             children: [
@@ -3197,14 +3709,14 @@ const E2 = ({
                   c.jsxs("button", {
                     type: "button",
                     onClick: () => ae("filter"),
-                    className: `flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer whitespace-nowrap ${de === "filter" ? "bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-400/60" : "bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20"}`,
+                    className: `flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer whitespace-nowrap ${de === "filter" || de === "link_checker" ? "bg-amber-500 text-slate-950 shadow-md ring-2 ring-amber-400/60" : "bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:bg-amber-500/20"}`,
                     children: [
                       c.jsx(su, { className: "w-3.5 h-3.5" }),
-                      c.jsx("span", { children: "قسم التصفية والمكررات" }),
+                      c.jsx("span", { children: "قسم التصفية والمكررات والفحص" }),
                       c.jsx("span", {
                         className:
                           "px-1.5 py-0.2 rounded-full bg-black/40 text-[10px] text-amber-200",
-                        children: "جديد",
+                        children: "شامل ⚡",
                       }),
                     ],
                   }),
@@ -3218,7 +3730,7 @@ const E2 = ({
                     type: "button",
                     onClick: () => ae("backup"),
                     className: `px-3 py-1.5 rounded-xl text-xs font-black transition-all cursor-pointer whitespace-nowrap ${de === "backup" ? "bg-emerald-600 text-white shadow-md" : "bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800"}`,
-                    children: "💾 النسخ الاحتياطي والبيانات",
+                    children: "💾 النسخ الاحتياطي والتصدير",
                   }),
                   c.jsx("button", {
                     type: "button",
@@ -3231,11 +3743,107 @@ const E2 = ({
               c.jsxs("div", {
                 className: "p-4 sm:p-5 space-y-6 overflow-y-auto flex-1",
                 children: [
-                  (de === "all" || de === "filter") &&
+                  (de === "all" || de === "filter" || de === "link_checker") &&
                     c.jsxs("div", {
-                      className:
-                        "bg-gradient-to-b from-slate-950/95 via-slate-900/90 to-slate-950/95 border-2 border-amber-500/40 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl",
+                      className: "space-y-4",
                       children: [
+                        // Sub-Tab Switcher Bar inside Filter Section
+                        c.jsxs("div", {
+                          className:
+                            "bg-slate-950/90 border border-amber-500/40 rounded-2xl p-2.5 sm:p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg",
+                          children: [
+                            c.jsxs("div", {
+                              className: "flex items-center gap-2.5",
+                              children: [
+                                c.jsx("div", {
+                                  className:
+                                    "w-8 h-8 rounded-xl bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center justify-center shrink-0",
+                                  children: c.jsx(jA, {
+                                    className:
+                                      "w-4.5 h-4.5 text-amber-400 stroke-[2.5]",
+                                  }),
+                                }),
+                                c.jsxs("div", {
+                                  children: [
+                                    c.jsx("h4", {
+                                      className:
+                                        "text-sm sm:text-base font-black text-amber-300",
+                                      children:
+                                        "قسم التصفية والمكررات وفحص الروابط",
+                                    }),
+                                    c.jsx("p", {
+                                      className:
+                                        "text-[11px] text-slate-400 font-semibold",
+                                      children:
+                                        "تصفية المكررات، فحص الروابط وكشف الصفحات الفارغة، وتنقية الأسماء",
+                                    }),
+                                  ],
+                                }),
+                              ],
+                            }),
+                            c.jsxs("div", {
+                              className:
+                                "flex items-center gap-1.5 p-1 bg-slate-900 rounded-xl border border-slate-800 shrink-0",
+                              children: [
+                                c.jsxs("button", {
+                                  type: "button",
+                                  onClick: () => setFilterSubTab("dedup"),
+                                  className: `flex items-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                                    filterSubTab === "dedup"
+                                      ? "bg-amber-500 text-slate-950 shadow-md font-black"
+                                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-850"
+                                  }`,
+                                  children: [
+                                    c.jsx(su, { className: "w-3.5 h-3.5" }),
+                                    c.jsx("span", {
+                                      children: "🎯 تصفية المكررات",
+                                    }),
+                                    Ae.length > 0 &&
+                                      c.jsxs("span", {
+                                        className:
+                                          "px-1.5 py-0.2 rounded-full bg-black/40 text-[10px] text-amber-200 font-mono",
+                                        children: [Ae.length],
+                                      }),
+                                  ],
+                                }),
+                                c.jsxs("button", {
+                                  type: "button",
+                                  onClick: () => setFilterSubTab("broken_links"),
+                                  className: `flex items-center gap-1.5 py-1.5 px-3 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                                    filterSubTab === "broken_links"
+                                      ? "bg-rose-600 text-white shadow-md font-black"
+                                      : "text-slate-400 hover:text-slate-200 hover:bg-slate-850"
+                                  }`,
+                                  children: [
+                                    c.jsx(Uo, {
+                                      className: "w-3.5 h-3.5 text-rose-300",
+                                    }),
+                                    c.jsx("span", {
+                                      children:
+                                        "🔍 فحص الروابط والصفحات الفارغة",
+                                    }),
+                                    brokenMoviesList.length > 0
+                                      ? c.jsxs("span", {
+                                          className:
+                                            "px-1.5 py-0.2 rounded-full bg-rose-950 text-[10px] text-rose-200 border border-rose-500/40 font-mono",
+                                          children: [brokenMoviesList.length],
+                                        })
+                                      : c.jsx("span", {
+                                          className:
+                                            "px-1.5 py-0.2 rounded-full bg-rose-950/60 text-[9px] text-rose-300 border border-rose-500/30",
+                                          children: "⚡",
+                                        }),
+                                  ],
+                                }),
+                              ],
+                            }),
+                          ],
+                        }),
+                        (de === "all" || filterSubTab === "dedup") &&
+                          c.jsxs("div", {
+                            className:
+                              "bg-gradient-to-b from-slate-950/95 via-slate-900/90 to-slate-950/95 border-2 border-amber-500/40 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xl",
+                            children: [
                         c.jsx("div", {
                           className:
                             "flex items-center justify-between border-b border-amber-500/30 pb-3",
@@ -3317,12 +3925,17 @@ const E2 = ({
                                 c.jsxs("button", {
                                   type: "button",
                                   onClick: () => U("folder"),
-                                  className: `flex items-center justify-center gap-2 p-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${$ === "folder" ? "bg-indigo-600 text-white shadow-md ring-2 ring-indigo-400" : "bg-slate-900 text-slate-300 hover:bg-slate-850 border border-slate-800"}`,
+                                  className: `flex items-center justify-center gap-1.5 p-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${$ === "folder" ? "bg-indigo-600 text-white shadow-md ring-2 ring-indigo-400" : "bg-slate-900 text-slate-300 hover:bg-slate-850 border border-slate-800"}`,
                                   children: [
                                     c.jsx(Rr, {
                                       className: "w-4 h-4 text-indigo-300",
                                     }),
-                                    c.jsx("span", { children: "مستودع معين" }),
+                                    c.jsx("span", { children: "مستودعات محددة (متعدد)" }),
+                                    selectedFolderIds.size > 0 &&
+                                      c.jsxs("span", {
+                                        className: `px-1.5 py-0.2 rounded-full text-[10px] font-mono font-black ${$ === "folder" ? "bg-indigo-950 text-indigo-200" : "bg-indigo-900/60 text-indigo-300"}`,
+                                        children: [selectedFolderIds.size],
+                                      }),
                                   ],
                                 }),
                                 c.jsxs("button", {
@@ -3369,45 +3982,371 @@ const E2 = ({
                             }),
                             $ === "folder" &&
                               c.jsxs("div", {
-                                className:
-                                  "pt-2 animate-in fade-in duration-150",
+                                className: "pt-2 space-y-3 animate-in fade-in duration-150",
                                 children: [
-                                  c.jsx("label", {
+                                  c.jsxs("div", {
                                     className:
-                                      "block text-[11px] font-bold text-slate-300 mb-1.5",
-                                    children:
-                                      "اختر المستودع المراد إزالة المكررات منه:",
+                                      "flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-2",
+                                    children: [
+                                      c.jsxs("div", {
+                                        children: [
+                                          c.jsx("label", {
+                                            className:
+                                              "block text-xs font-black text-amber-300",
+                                            children:
+                                              "اختر المستودعات المراد فحصها وإزالة المكررات منها (مستودع أو عدة مستودعات معاً):",
+                                          }),
+                                          c.jsx("p", {
+                                            className:
+                                              "text-[11px] text-slate-400 mt-0.5",
+                                            children:
+                                              "💡 سيتم فحص كافة العناصر بداخل هذه المستودعات مجمعة وحذف المكررات مع الإبقاء على نسخة واحدة بداخل المستودع الأول في الترتيب.",
+                                          }),
+                                        ],
+                                      }),
+                                      c.jsxs("div", {
+                                        className:
+                                          "flex items-center gap-1.5 shrink-0 flex-wrap",
+                                        children: [
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () => {
+                                              const allValidIds = activeFolders.map(
+                                                (f) => f.id,
+                                              );
+                                              setSelectedFolderIds(
+                                                new Set(allValidIds),
+                                              );
+                                              _e(!1);
+                                            },
+                                            className:
+                                              "px-2.5 py-1 rounded-lg bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-200 border border-indigo-500/40 text-[11px] font-bold transition-all cursor-pointer",
+                                            children: "تحديد كل المستودعات ✓",
+                                          }),
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () => {
+                                              setSelectedFolderIds(new Set());
+                                              _e(!1);
+                                            },
+                                            className:
+                                              "px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-white border border-slate-700 text-[11px] font-bold transition-all cursor-pointer",
+                                            children: "إلغاء التحديد ✕",
+                                          }),
+                                        ],
+                                      }),
+                                    ],
                                   }),
-                                  c.jsx("select", {
-                                    value: P,
-                                    onChange: (ge) => {
-                                      (Z(ge.target.value), _e(!1));
-                                    },
+                                  c.jsxs("div", {
                                     className:
-                                      "w-full px-3 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs font-bold text-white focus:outline-none focus:border-indigo-500 cursor-pointer",
-                                    children: t
-                                      .filter((ge) => ge.id !== Pt)
+                                      "flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 bg-slate-900/60 p-2 rounded-xl border border-slate-800",
+                                    children: [
+                                      c.jsxs("div", {
+                                        className:
+                                          "flex items-center gap-1 overflow-x-auto no-scrollbar",
+                                        children: [
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () =>
+                                              setDedupFolderZoneFilter("all"),
+                                            className: `px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shrink-0 ${dedupFolderZoneFilter === "all" ? "bg-amber-500 text-slate-950 font-black shadow" : "bg-slate-800 text-slate-400 hover:text-slate-200"}`,
+                                            children: `الكل (${activeFolders.length})`,
+                                          }),
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () =>
+                                              setDedupFolderZoneFilter("green"),
+                                            className: `px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shrink-0 ${dedupFolderZoneFilter === "green" ? "bg-emerald-600 text-white font-black shadow" : "bg-emerald-950/40 text-emerald-300 border border-emerald-600/30"}`,
+                                            children: `الأخضر (${settingsZoneCounts.green})`,
+                                          }),
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () =>
+                                              setDedupFolderZoneFilter(
+                                                "yellow",
+                                              ),
+                                            className: `px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shrink-0 ${dedupFolderZoneFilter === "yellow" ? "bg-amber-500 text-slate-950 font-black shadow" : "bg-amber-950/40 text-amber-300 border border-amber-600/30"}`,
+                                            children: `الأصفر (${settingsZoneCounts.yellow})`,
+                                          }),
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () =>
+                                              setDedupFolderZoneFilter(
+                                                "purple",
+                                              ),
+                                            className: `px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shrink-0 ${dedupFolderZoneFilter === "purple" ? "bg-purple-600 text-white font-black shadow" : "bg-purple-950/40 text-purple-300 border border-purple-600/30"}`,
+                                            children: `البنفسجي (${settingsZoneCounts.purple})`,
+                                          }),
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () =>
+                                              setDedupFolderZoneFilter("black"),
+                                            className: `px-2 py-0.5 rounded-lg text-[10px] font-black transition-all cursor-pointer shrink-0 ${dedupFolderZoneFilter === "black" ? "bg-slate-700 text-white font-black shadow" : "bg-slate-900 text-slate-400 border border-slate-700"}`,
+                                            children: `الأسود (${settingsZoneCounts.black})`,
+                                          }),
+                                        ],
+                                      }),
+                                      c.jsx("input", {
+                                        type: "text",
+                                        value: dedupFolderSearch,
+                                        onChange: (e) =>
+                                          setDedupFolderSearch(e.target.value),
+                                        placeholder:
+                                          "بحث سريع في أسماء المستودعات...",
+                                        className:
+                                          "px-2.5 py-1 bg-slate-950 text-slate-200 text-xs rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-400 font-sans min-w-[180px]",
+                                      }),
+                                    ],
+                                  }),
+                                  c.jsx("div", {
+                                    className:
+                                      "grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-56 overflow-y-auto custom-scrollbar p-1 border border-slate-800/90 rounded-xl bg-slate-950/70",
+                                    children: activeFolders
+                                      .filter((ge) => {
+                                        if (
+                                          dedupFolderZoneFilter !== "all" &&
+                                          getFolderZone(ge) !==
+                                            dedupFolderZoneFilter
+                                        )
+                                          return !1;
+                                        if (
+                                          dedupFolderSearch.trim() &&
+                                          !ge.name
+                                            .toLowerCase()
+                                            .includes(
+                                              dedupFolderSearch.toLowerCase(),
+                                            )
+                                        )
+                                          return !1;
+                                        return !0;
+                                      })
                                       .map((ge) => {
-                                        const Re = i.filter(
-                                          (Ue) =>
-                                            Ue.parentFolderId === ge.id &&
-                                            !Ue.isHidden,
-                                        ).length;
+                                        const isChecked = selectedFolderIds.has(
+                                            ge.id,
+                                          ),
+                                          globalOrder =
+                                            activeFolders.findIndex(
+                                              (f) => f.id === ge.id,
+                                            ) + 1,
+                                          isFirstSelected =
+                                            firstSelectedFolder?.id === ge.id,
+                                          selIdx =
+                                            selectedFoldersList.findIndex(
+                                              (f) => f.id === ge.id,
+                                            ),
+                                          movieCount =
+                                            movieCountMap[ge.id] || 0,
+                                          zone = getFolderZone(ge),
+                                          zoneBorderColor =
+                                            zone === "green"
+                                              ? "border-emerald-500/40"
+                                              : zone === "yellow"
+                                                ? "border-amber-500/40"
+                                                : zone === "purple"
+                                                  ? "border-purple-500/40"
+                                                  : "border-slate-700";
                                         return c.jsxs(
-                                          "option",
+                                          "div",
                                           {
-                                            value: ge.id,
+                                            onClick: () => {
+                                              setSelectedFolderIds((prev) => {
+                                                const next = new Set(prev);
+                                                if (next.has(ge.id)) {
+                                                  next.delete(ge.id);
+                                                } else {
+                                                  next.add(ge.id);
+                                                }
+                                                return next;
+                                              });
+                                              _e(!1);
+                                            },
+                                            className: `flex items-center justify-between p-2.5 rounded-xl border text-xs cursor-pointer transition-all select-none ${
+                                              isChecked
+                                                ? "bg-indigo-950/80 border-indigo-400 text-white shadow-lg ring-1 ring-indigo-400/50 scale-[1.01]"
+                                                : `bg-slate-900/80 hover:bg-slate-850 ${zoneBorderColor} text-slate-300 hover:text-white`
+                                            }`,
                                             children: [
-                                              "📁 ",
-                                              ge.name,
-                                              " (",
-                                              Re,
-                                              " عنصر)",
+                                              c.jsxs("div", {
+                                                className:
+                                                  "flex items-center gap-2 min-w-0 flex-1",
+                                                children: [
+                                                  c.jsx("div", {
+                                                    className: `w-4.5 h-4.5 rounded-md flex items-center justify-center shrink-0 border transition-all ${
+                                                      isChecked
+                                                        ? "bg-indigo-600 border-indigo-400 text-white shadow"
+                                                        : "bg-slate-950 border-slate-700 text-transparent"
+                                                    }`,
+                                                    children: c.jsx(os, {
+                                                      className:
+                                                        "w-3 h-3 stroke-[3]",
+                                                    }),
+                                                  }),
+                                                  c.jsx("span", {
+                                                    className:
+                                                      "w-2.5 h-2.5 rounded-full shrink-0",
+                                                    style: {
+                                                      backgroundColor:
+                                                        ge.color ||
+                                                        (zone === "green"
+                                                          ? "#10b981"
+                                                          : zone === "yellow"
+                                                            ? "#f59e0b"
+                                                            : zone === "purple"
+                                                              ? "#a855f7"
+                                                              : "#64748b"),
+                                                    },
+                                                  }),
+                                                  c.jsxs("div", {
+                                                    className:
+                                                      "min-w-0 flex-1",
+                                                    children: [
+                                                      c.jsxs("div", {
+                                                        className:
+                                                          "flex items-center gap-1.5",
+                                                        children: [
+                                                          c.jsxs("span", {
+                                                            className:
+                                                              "text-[10px] font-mono px-1 py-0.2 rounded bg-black/40 text-slate-400 shrink-0",
+                                                            children: [
+                                                              "#",
+                                                              globalOrder,
+                                                            ],
+                                                          }),
+                                                          c.jsx("span", {
+                                                            className:
+                                                              "font-black truncate text-xs",
+                                                            children: ge.name,
+                                                          }),
+                                                        ],
+                                                      }),
+                                                      isChecked &&
+                                                        isFirstSelected &&
+                                                        selectedFoldersList.length >
+                                                          1 &&
+                                                        c.jsx("span", {
+                                                          className:
+                                                            "inline-block mt-0.5 text-[9px] font-black px-1.5 py-0.2 rounded bg-amber-400 text-slate-950 shadow-sm animate-pulse",
+                                                          children:
+                                                            "👑 المستودع الأول (المعتمد)",
+                                                        }),
+                                                      isChecked &&
+                                                        !isFirstSelected &&
+                                                        selectedFoldersList.length >
+                                                          1 &&
+                                                        c.jsxs("span", {
+                                                          className:
+                                                            "inline-block mt-0.5 text-[9px] font-bold px-1.5 py-0.2 rounded bg-slate-800 text-slate-400",
+                                                          children: [
+                                                            "المستودع #",
+                                                            selIdx + 1,
+                                                          ],
+                                                        }),
+                                                    ],
+                                                  }),
+                                                ],
+                                              }),
+                                              c.jsxs("span", {
+                                                className:
+                                                  "px-2 py-0.5 rounded-full bg-black/50 text-[10px] font-mono text-slate-300 shrink-0 mr-1",
+                                                children: [
+                                                  movieCount,
+                                                  " فيلم",
+                                                ],
+                                              }),
                                             ],
                                           },
                                           ge.id,
                                         );
                                       }),
+                                  }),
+                                  c.jsx("div", {
+                                    children:
+                                      selectedFoldersList.length === 0
+                                        ? c.jsx("div", {
+                                            className:
+                                              "p-2.5 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-xs font-bold text-center",
+                                            children:
+                                              "⚠️ لم يتم اختيار أي مستودع. يرجى النقر على مستودع واحد أو أكثر للبدء بفحص المكررات.",
+                                          })
+                                        : selectedFoldersList.length === 1
+                                          ? c.jsxs("div", {
+                                              className:
+                                                "p-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 text-xs flex items-center justify-between gap-2",
+                                              children: [
+                                                c.jsxs("span", {
+                                                  children: [
+                                                    "📁 تم اختيار مستودع واحد: ",
+                                                    c.jsx("strong", {
+                                                      className:
+                                                        "text-white font-black",
+                                                      children:
+                                                        firstSelectedFolder?.name,
+                                                    }),
+                                                    ` (${movieCountMap[firstSelectedFolder?.id] || 0} فيلم)`,
+                                                  ],
+                                                }),
+                                                c.jsx("span", {
+                                                  className:
+                                                    "text-[11px] text-slate-400",
+                                                  children:
+                                                    "💡 يمكنك اختيار مستودعات أخرى لفحص المكررات بينها دفعة واحدة.",
+                                                }),
+                                              ],
+                                            })
+                                          : c.jsxs("div", {
+                                              className:
+                                                "p-3 rounded-xl bg-gradient-to-r from-amber-950/70 via-indigo-950/70 to-slate-900 border-2 border-amber-500/60 text-xs space-y-1.5 shadow-md",
+                                              children: [
+                                                c.jsxs("div", {
+                                                  className:
+                                                    "flex items-center justify-between gap-2 flex-wrap",
+                                                  children: [
+                                                    c.jsxs("span", {
+                                                      className:
+                                                        "font-black text-amber-300 flex items-center gap-1.5",
+                                                      children: [
+                                                        "✨ تم تحديد ",
+                                                        c.jsx("span", {
+                                                          className:
+                                                            "underline text-white font-black",
+                                                          children:
+                                                            selectedFoldersList.length,
+                                                        }),
+                                                        " مستودعات للفحص المشترك (إجمالي ",
+                                                        J.length,
+                                                        " فيلم):",
+                                                      ],
+                                                    }),
+                                                    c.jsxs("span", {
+                                                      className:
+                                                        "text-[11px] px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 font-black shadow-sm",
+                                                      children: [
+                                                        "المستودع الأول للإبقاء: ",
+                                                        firstSelectedFolder?.name,
+                                                        " 👑",
+                                                      ],
+                                                    }),
+                                                  ],
+                                                }),
+                                                c.jsxs("p", {
+                                                  className:
+                                                    "text-[11px] text-slate-300 leading-relaxed",
+                                                  children: [
+                                                    "سيتم الإبقاء على نسخة الفيلم بداخل ",
+                                                    c.jsx("span", {
+                                                      className:
+                                                        "text-amber-200 font-bold",
+                                                      children:
+                                                        firstSelectedFolder?.name,
+                                                    }),
+                                                    " (المستودع الأول في الترتيب)، وحذف النسخ المكررة لنفس الرابط من باقي الـ (",
+                                                    selectedFoldersList.length -
+                                                      1,
+                                                    ") مستودع الأخرى تلقائياً.",
+                                                  ],
+                                                }),
+                                              ],
+                                            }),
                                   }),
                                 ],
                               }),
@@ -3650,16 +4589,29 @@ const E2 = ({
                                         }),
                                         c.jsxs("div", {
                                           className:
-                                            "flex items-center gap-2 text-emerald-300 font-semibold bg-emerald-950/30 p-1.5 rounded border border-emerald-500/30",
+                                            "flex items-center justify-between gap-2 text-emerald-300 font-semibold bg-emerald-950/40 p-2 rounded-lg border border-emerald-500/40 text-xs",
                                           children: [
-                                            c.jsx("span", {
-                                              className:
-                                                "text-[10px] px-1.5 py-0.2 rounded bg-emerald-500 text-slate-950 font-black flex-shrink-0",
-                                              children: "نسخة محفوظة",
+                                            c.jsxs("div", {
+                                              className: "flex items-center gap-2 truncate min-w-0 flex-1",
+                                              children: [
+                                                c.jsx("span", {
+                                                  className:
+                                                    "text-[10px] px-2 py-0.5 rounded bg-emerald-500 text-slate-950 font-black flex-shrink-0 shadow-sm",
+                                                  children: "نسخة محفوظة 👑",
+                                                }),
+                                                c.jsx("span", {
+                                                  className: "truncate font-bold text-white",
+                                                  children: ge.keptMovie.title,
+                                                }),
+                                              ],
                                             }),
-                                            c.jsx("span", {
-                                              className: "truncate",
-                                              children: ge.keptMovie.title,
+                                            c.jsxs("span", {
+                                              className:
+                                                "text-[10px] px-2 py-0.5 rounded bg-slate-900 text-emerald-300 border border-emerald-500/30 font-bold shrink-0",
+                                              children: [
+                                                "📁 المستودع الأول: ",
+                                                folderMap.get(ge.keptMovie.parentFolderId)?.name || "المستودع الأول",
+                                              ],
                                             }),
                                           ],
                                         }),
@@ -3668,16 +4620,29 @@ const E2 = ({
                                             "div",
                                             {
                                               className:
-                                                "flex items-center gap-2 text-rose-300 font-medium bg-rose-950/30 p-1.5 rounded border border-rose-500/30",
+                                                "flex items-center justify-between gap-2 text-rose-300 font-medium bg-rose-950/30 p-2 rounded-lg border border-rose-500/30 text-xs",
                                               children: [
-                                                c.jsx("span", {
-                                                  className:
-                                                    "text-[10px] px-1.5 py-0.2 rounded bg-rose-600 text-white font-black flex-shrink-0",
-                                                  children: "سيتم الحذف",
+                                                c.jsxs("div", {
+                                                  className: "flex items-center gap-2 truncate min-w-0 flex-1",
+                                                  children: [
+                                                    c.jsx("span", {
+                                                      className:
+                                                        "text-[10px] px-2 py-0.5 rounded bg-rose-600 text-white font-black flex-shrink-0 shadow-sm",
+                                                      children: "سيتم الحذف 🗑️",
+                                                    }),
+                                                    c.jsx("span", {
+                                                      className: "truncate text-slate-200",
+                                                      children: Ue.title,
+                                                    }),
+                                                  ],
                                                 }),
-                                                c.jsx("span", {
-                                                  className: "truncate",
-                                                  children: Ue.title,
+                                                c.jsxs("span", {
+                                                  className:
+                                                    "text-[10px] px-2 py-0.5 rounded bg-slate-900 text-rose-300 border border-rose-500/30 shrink-0",
+                                                  children: [
+                                                    "📁 من: ",
+                                                    folderMap.get(Ue.parentFolderId)?.name || "مستودع آخر",
+                                                  ],
                                                 }),
                                               ],
                                             },
@@ -3772,6 +4737,769 @@ const E2 = ({
                         }),
                       ],
                     }),
+
+                        // SUB-TOOL 2: LINK CHECKER & DEAD / EMPTY PAGES INSPECTOR
+                        (de === "all" || filterSubTab === "broken_links") &&
+                          c.jsxs("div", {
+                            className:
+                              "bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 border-2 border-rose-500/50 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xl animate-in fade-in duration-150",
+                            children: [
+                        // Section Header
+                        c.jsxs("div", {
+                          className:
+                            "flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-rose-500/30 pb-3.5",
+                          children: [
+                            c.jsxs("div", {
+                              className: "flex items-center gap-2.5",
+                              children: [
+                                c.jsx("div", {
+                                  className:
+                                    "w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-600 to-amber-600 text-white flex items-center justify-center flex-shrink-0 shadow-md shadow-rose-600/30",
+                                  children: c.jsx(Uo, {
+                                    className: "w-5 h-5 text-white stroke-[2.5]",
+                                  }),
+                                }),
+                                c.jsxs("div", {
+                                  children: [
+                                    c.jsxs("h4", {
+                                      className:
+                                        "text-base sm:text-lg font-black text-white flex items-center gap-2 flex-wrap",
+                                      children: [
+                                        c.jsx("span", {
+                                          children:
+                                            "أداة فحص الروابط وكشف الصفحات الفارغة والمحذوفة",
+                                        }),
+                                        c.jsx("span", {
+                                          className:
+                                            "text-[10px] px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-500/40 font-mono font-bold",
+                                          children: "فحص يوتيوب الذكي ⚡",
+                                        }),
+                                      ],
+                                    }),
+                                    c.jsx("p", {
+                                      className:
+                                        "text-xs text-slate-400 font-semibold mt-0.5",
+                                      children:
+                                        "حدد المستودع المستهدف لفحص مقاطع يوتيوب وروابط الأفلام واكتشاف العناصر المحذوفة أو الخاصة أو التي تؤدي لصفحة فارغة، ثم حذفها نهائياً بضغطة زر.",
+                                    }),
+                                  ],
+                                }),
+                              ],
+                            }),
+                          ],
+                        }),
+
+                        // Notice Banner (if any)
+                        checkerNotice &&
+                          c.jsxs("div", {
+                            className: `p-3.5 rounded-xl border flex items-center justify-between gap-2.5 animate-in fade-in ${
+                              brokenMoviesList.length > 0
+                                ? "bg-rose-950/80 border-rose-500/60 text-rose-200"
+                                : "bg-emerald-950/80 border-emerald-500/60 text-emerald-200"
+                            }`,
+                            children: [
+                              c.jsxs("div", {
+                                className:
+                                  "flex items-center gap-2 text-xs font-bold leading-relaxed",
+                                children: [
+                                  brokenMoviesList.length > 0
+                                    ? c.jsx(Uo, {
+                                        className: "w-4 h-4 text-rose-400 shrink-0",
+                                      })
+                                    : c.jsx(ya, {
+                                        className:
+                                          "w-4 h-4 text-emerald-400 shrink-0",
+                                      }),
+                                  c.jsx("span", { children: checkerNotice }),
+                                ],
+                              }),
+                              c.jsx("button", {
+                                type: "button",
+                                onClick: () => setCheckerNotice(null),
+                                className:
+                                  "text-xs px-2 py-0.5 rounded hover:bg-black/30 cursor-pointer shrink-0",
+                                children: "✕",
+                              }),
+                            ],
+                          }),
+
+                        // Control Panel: Target Repository & Mode
+                        c.jsxs("div", {
+                          className:
+                            "grid grid-cols-1 md:grid-cols-2 gap-3.5 p-4 rounded-xl bg-slate-950/80 border border-rose-500/30 shadow-inner",
+                          children: [
+                            // Column 1: Select Target Repository
+                            c.jsxs("div", {
+                              className: "space-y-2",
+                              children: [
+                                c.jsxs("label", {
+                                  className:
+                                    "text-xs font-black text-rose-300 flex items-center gap-1.5",
+                                  children: [
+                                    c.jsx(pm, {
+                                      className: "w-3.5 h-3.5 text-rose-400",
+                                    }),
+                                    c.jsx("span", {
+                                      children: "1. اختر المستودع المراد فحصه:",
+                                    }),
+                                  ],
+                                }),
+                                c.jsx("select", {
+                                  value: checkerTargetFolderId,
+                                  disabled: isScanningLinks,
+                                  onChange: (ev) => {
+                                    setCheckerTargetFolderId(ev.target.value);
+                                    setBrokenMoviesList([]);
+                                    setSelectedBrokenMovieIds(new Set());
+                                    setCheckerNotice(null);
+                                  },
+                                  className:
+                                    "w-full px-3.5 py-2.5 bg-slate-900 text-white rounded-xl border border-rose-500/40 text-xs font-bold focus:outline-none focus:border-rose-400 cursor-pointer disabled:opacity-50",
+                                  children: [
+                                    c.jsx(
+                                      "option",
+                                      {
+                                        value: "all",
+                                        className:
+                                          "bg-slate-900 text-amber-300 font-bold",
+                                        children: `🌐 كافة المستودعات المتاحة (${(i || []).length} عنصر إجمالي)`,
+                                      },
+                                      "opt-all"
+                                    ),
+                                    activeFolders.map((f: any) => {
+                                      const zCfg = getRepoZoneConfig(
+                                        getFolderZone(f)
+                                      );
+                                      const count = movieCountMap[f.id] || 0;
+                                      return c.jsx(
+                                        "option",
+                                        {
+                                          value: f.id,
+                                          className: "bg-slate-900 text-white",
+                                          children: `[${zCfg.name}] ${f.name} (${count} عنصر)`,
+                                        },
+                                        f.id
+                                      );
+                                    }),
+                                  ],
+                                }),
+                                c.jsxs("div", {
+                                  className:
+                                    "flex items-center gap-2 text-[11px] text-slate-400 flex-wrap pt-0.5",
+                                  children: [
+                                    c.jsxs("span", {
+                                      className:
+                                        "px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-300 font-mono",
+                                      children: [
+                                        "إجمالي العناصر: ",
+                                        checkerTargetFolderId === "all"
+                                          ? (i || []).length
+                                          : (movieCountMap[
+                                              checkerTargetFolderId
+                                            ] || 0),
+                                      ],
+                                    }),
+                                    c.jsxs("span", {
+                                      className:
+                                        "px-2 py-0.5 rounded-md bg-rose-950/60 border border-rose-500/30 text-rose-300 font-mono font-bold",
+                                      children: [
+                                        "🎥 روابط يوتيوب المرصودة: ",
+                                        (i || []).filter(
+                                          (m: any) =>
+                                            !m.isHidden &&
+                                            (checkerTargetFolderId === "all" ||
+                                              m.parentFolderId ===
+                                                checkerTargetFolderId) &&
+                                            ((m.url || m.embedUrl || "")
+                                              .toLowerCase()
+                                              .includes("youtu") ||
+                                              !(
+                                                m.url ||
+                                                m.embedUrl ||
+                                                ""
+                                              ).trim())
+                                        ).length,
+                                      ],
+                                    }),
+                                  ],
+                                }),
+                              ],
+                            }),
+
+                            // Column 2: Scope & Scan Mode
+                            c.jsxs("div", {
+                              className: "space-y-2",
+                              children: [
+                                c.jsxs("label", {
+                                  className:
+                                    "text-xs font-black text-rose-300 flex items-center gap-1.5",
+                                  children: [
+                                    c.jsx(ec, {
+                                      className: "w-3.5 h-3.5 text-rose-400",
+                                    }),
+                                    c.jsx("span", {
+                                      children: "2. نطاق الفحص المستهدف:",
+                                    }),
+                                  ],
+                                }),
+                                c.jsxs("div", {
+                                  className:
+                                    "grid grid-cols-1 sm:grid-cols-2 gap-2",
+                                  children: [
+                                    c.jsxs("button", {
+                                      type: "button",
+                                      disabled: isScanningLinks,
+                                      onClick: () =>
+                                        setCheckerMode("youtube_only"),
+                                      className: `p-2.5 rounded-xl border text-right transition-all cursor-pointer flex flex-col justify-between ${
+                                        checkerMode === "youtube_only"
+                                          ? "bg-rose-950/70 border-rose-500 text-white ring-2 ring-rose-500/30"
+                                          : "bg-slate-900/90 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                                      }`,
+                                      children: [
+                                        c.jsxs("div", {
+                                          className:
+                                            "flex items-center justify-between",
+                                          children: [
+                                            c.jsx("span", {
+                                              className:
+                                                "text-xs font-black text-rose-300",
+                                              children: "🎥 روابط يوتيوب فقط",
+                                            }),
+                                            checkerMode === "youtube_only" &&
+                                              c.jsx(ya, {
+                                                className:
+                                                  "w-3.5 h-3.5 text-rose-400",
+                                              }),
+                                          ],
+                                        }),
+                                        c.jsx("span", {
+                                          className:
+                                            "text-[10px] text-slate-400 leading-tight mt-1",
+                                          children:
+                                            "فحص الفيديوهات المحذوفة والخاصة والصفحات الفارغة (موصى به)",
+                                        }),
+                                      ],
+                                    }),
+                                    c.jsxs("button", {
+                                      type: "button",
+                                      disabled: isScanningLinks,
+                                      onClick: () =>
+                                        setCheckerMode("all_links"),
+                                      className: `p-2.5 rounded-xl border text-right transition-all cursor-pointer flex flex-col justify-between ${
+                                        checkerMode === "all_links"
+                                          ? "bg-rose-950/70 border-rose-500 text-white ring-2 ring-rose-500/30"
+                                          : "bg-slate-900/90 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+                                      }`,
+                                      children: [
+                                        c.jsxs("div", {
+                                          className:
+                                            "flex items-center justify-between",
+                                          children: [
+                                            c.jsx("span", {
+                                              className:
+                                                "text-xs font-black text-amber-300",
+                                              children:
+                                                "🌐 فحص شامل لكل الروابط",
+                                            }),
+                                            checkerMode === "all_links" &&
+                                              c.jsx(ya, {
+                                                className:
+                                                  "w-3.5 h-3.5 text-amber-400",
+                                              }),
+                                          ],
+                                        }),
+                                        c.jsx("span", {
+                                          className:
+                                            "text-[10px] text-slate-400 leading-tight mt-1",
+                                          children:
+                                            "فحص روابط يوتيوب وسيرفرات البث الخارجية ورموز 404",
+                                        }),
+                                      ],
+                                    }),
+                                  ],
+                                }),
+                              ],
+                            }),
+                          ],
+                        }),
+
+                        // Scan Action & Live Progress
+                        c.jsxs("div", {
+                          className: "space-y-3",
+                          children: [
+                            c.jsxs("div", {
+                              className:
+                                "flex flex-col sm:flex-row sm:items-center justify-between gap-3",
+                              children: [
+                                !isScanningLinks
+                                  ? c.jsxs("button", {
+                                      type: "button",
+                                      onClick: handleStartLinkScan,
+                                      className:
+                                        "flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-rose-600 via-rose-500 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-rose-900/40 transition-all cursor-pointer active:scale-95 border border-rose-400/40",
+                                      children: [
+                                        c.jsx($i, {
+                                          className: "w-4 h-4 stroke-[2.5]",
+                                        }),
+                                        c.jsx("span", {
+                                          children:
+                                            "بدء فحص الروابط وكشف الصفحات الفارغة الآن 🔍",
+                                        }),
+                                      ],
+                                    })
+                                  : c.jsxs("button", {
+                                      type: "button",
+                                      onClick: handleStopLinkScan,
+                                      className:
+                                        "flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-300 border border-rose-500/50 font-black text-xs sm:text-sm shadow-md transition-all cursor-pointer active:scale-95",
+                                      children: [
+                                        c.jsx(Fr, {
+                                          className:
+                                            "w-4 h-4 animate-spin text-rose-400",
+                                        }),
+                                        c.jsx("span", {
+                                          children: "إيقاف الفحص مؤقتاً ⏹️",
+                                        }),
+                                      ],
+                                    }),
+
+                                // Live counters
+                                (isScanningLinks || scanProgress.total > 0) &&
+                                  c.jsxs("div", {
+                                    className:
+                                      "flex items-center gap-2 flex-wrap",
+                                    children: [
+                                      c.jsxs("span", {
+                                        className:
+                                          "px-3 py-1.5 rounded-xl bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1.5 shadow-sm",
+                                        children: [
+                                          c.jsx(ya, {
+                                            className:
+                                              "w-3.5 h-3.5 text-emerald-400",
+                                          }),
+                                          c.jsxs("span", {
+                                            children: [
+                                              "روابط سليمة: ",
+                                              scanHealthyCount,
+                                            ],
+                                          }),
+                                        ],
+                                      }),
+                                      c.jsxs("span", {
+                                        className:
+                                          "px-3 py-1.5 rounded-xl bg-rose-950/70 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center gap-1.5 shadow-sm",
+                                        children: [
+                                          c.jsx(Uo, {
+                                            className:
+                                              "w-3.5 h-3.5 text-rose-400",
+                                          }),
+                                          c.jsxs("span", {
+                                            children: [
+                                              "صفحات فارغة ومعطوبة: ",
+                                              brokenMoviesList.length,
+                                            ],
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                              ],
+                            }),
+
+                            // Visual Progress Bar
+                            (isScanningLinks ||
+                              (scanProgress.percent > 0 &&
+                                scanProgress.percent < 100)) &&
+                              c.jsxs("div", {
+                                className:
+                                  "p-3.5 rounded-xl bg-slate-950/90 border border-slate-800 space-y-2 animate-in fade-in",
+                                children: [
+                                  c.jsxs("div", {
+                                    className:
+                                      "flex items-center justify-between text-xs font-bold",
+                                    children: [
+                                      c.jsxs("span", {
+                                        className:
+                                          "text-rose-300 flex items-center gap-2",
+                                        children: [
+                                          c.jsx(Fr, {
+                                            className:
+                                              "w-3.5 h-3.5 animate-spin",
+                                          }),
+                                          c.jsxs("span", {
+                                            children: [
+                                              "جاري فحص: ",
+                                              scanProgress.currentItemName ||
+                                                "عناصر المستودع...",
+                                            ],
+                                          }),
+                                        ],
+                                      }),
+                                      c.jsxs("span", {
+                                        className: "text-white font-mono",
+                                        children: [
+                                          scanProgress.current,
+                                          " / ",
+                                          scanProgress.total,
+                                          " (",
+                                          scanProgress.percent,
+                                          "%)",
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                  c.jsx("div", {
+                                    className:
+                                      "w-full h-2.5 bg-slate-900 rounded-full overflow-hidden border border-slate-800",
+                                    children: c.jsx("div", {
+                                      className:
+                                        "h-full bg-gradient-to-r from-rose-600 via-amber-500 to-emerald-500 transition-all duration-200",
+                                      style: {
+                                        width: `${scanProgress.percent}%`,
+                                      },
+                                    }),
+                                  }),
+                                ],
+                              }),
+                          ],
+                        }),
+
+                        // Scan Clean State (no broken movies found)
+                        !isScanningLinks &&
+                          scanProgress.total > 0 &&
+                          brokenMoviesList.length === 0 &&
+                          c.jsxs("div", {
+                            className:
+                              "p-5 rounded-xl bg-emerald-950/40 border-2 border-emerald-500/40 text-center space-y-2 animate-in fade-in",
+                            children: [
+                              c.jsx(ya, {
+                                className: "w-10 h-10 text-emerald-400 mx-auto",
+                              }),
+                              c.jsx("h5", {
+                                className:
+                                  "text-sm sm:text-base font-black text-emerald-300",
+                                children: "✓ المستودع نظيف وسليم 100%!",
+                              }),
+                              c.jsxs("p", {
+                                className:
+                                  "text-xs text-emerald-200/80 max-w-md mx-auto",
+                                children: [
+                                  "تم فحص كافة العناصر (",
+                                  scanProgress.total,
+                                  " عنصر) ولم يتم رصد أي روابط فارغة أو فيديوهات يوتيوب محذوفة.",
+                                ],
+                              }),
+                            ],
+                          }),
+
+                        // Broken / Empty Items Results Table
+                        brokenMoviesList.length > 0 &&
+                          c.jsxs("div", {
+                            className:
+                              "p-4 rounded-xl bg-slate-950/90 border-2 border-rose-500/40 space-y-3.5 shadow-xl animate-in fade-in",
+                            children: [
+                              // Results Header & Bulk Actions
+                              c.jsxs("div", {
+                                className:
+                                  "flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-rose-500/30 pb-3",
+                                children: [
+                                  c.jsxs("div", {
+                                    children: [
+                                      c.jsxs("h5", {
+                                        className:
+                                          "text-sm sm:text-base font-black text-rose-300 flex items-center gap-2",
+                                        children: [
+                                          c.jsx(Uo, {
+                                            className:
+                                              "w-4 h-4 text-rose-400",
+                                          }),
+                                          c.jsx("span", {
+                                            children:
+                                              "قائمة العناصر التي تؤدي إلى صفحة فارغة أو غير متاحة:",
+                                          }),
+                                        ],
+                                      }),
+                                      c.jsxs("p", {
+                                        className:
+                                          "text-[11px] text-slate-400 mt-0.5",
+                                        children: [
+                                          "تم رصد (",
+                                          brokenMoviesList.length,
+                                          ") عنصر معطوب. تم تحديد (",
+                                          selectedBrokenMovieIds.size,
+                                          ") للحذف النهائي.",
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                  c.jsxs("div", {
+                                    className:
+                                      "flex items-center gap-2 flex-wrap",
+                                    children: [
+                                      c.jsx("button", {
+                                        type: "button",
+                                        onClick: handleToggleSelectAllBroken,
+                                        className:
+                                          "px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all cursor-pointer",
+                                        children:
+                                          selectedBrokenMovieIds.size ===
+                                          brokenMoviesList.length
+                                            ? "إلغاء تحديد الكل"
+                                            : "تحديد الكل",
+                                      }),
+                                      c.jsxs("button", {
+                                        type: "button",
+                                        onClick: handleDeleteSelectedBroken,
+                                        disabled:
+                                          selectedBrokenMovieIds.size === 0,
+                                        className:
+                                          "flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-rose-600 to-red-700 hover:from-rose-500 hover:to-red-600 text-white font-black text-xs shadow-lg shadow-rose-950/70 border border-rose-400/50 transition-all cursor-pointer active:scale-95 disabled:opacity-50 whitespace-nowrap",
+                                        children: [
+                                          c.jsx(Hi, { className: "w-4 h-4" }),
+                                          c.jsxs("span", {
+                                            children: [
+                                              "حذف العناصر الفارغة المحددة (",
+                                              selectedBrokenMovieIds.size,
+                                              ") نهائياً 🗑️",
+                                            ],
+                                          }),
+                                        ],
+                                      }),
+                                    ],
+                                  }),
+                                ],
+                              }),
+
+                              // Search within broken items
+                              c.jsxs("div", {
+                                className: "relative w-full",
+                                children: [
+                                  c.jsx($i, {
+                                    className:
+                                      "w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2",
+                                  }),
+                                  c.jsx("input", {
+                                    type: "text",
+                                    value: checkerSearch,
+                                    onChange: (ev) =>
+                                      setCheckerSearch(ev.target.value),
+                                    placeholder:
+                                      "بحث في نتائج العناصر التالفة...",
+                                    className:
+                                      "w-full pl-9 pr-3.5 py-1.5 bg-slate-900 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500",
+                                  }),
+                                  checkerSearch &&
+                                    c.jsx("button", {
+                                      type: "button",
+                                      onClick: () => setCheckerSearch(""),
+                                      className:
+                                        "absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs",
+                                      children: "✕",
+                                    }),
+                                ],
+                              }),
+
+                              // List of Broken Items
+                              c.jsx("div", {
+                                className:
+                                  "space-y-2 max-h-[360px] overflow-y-auto custom-scrollbar p-1",
+                                children: brokenMoviesList
+                                  .filter((m: any) => {
+                                    if (!checkerSearch.trim()) return true;
+                                    const qStr = checkerSearch.toLowerCase();
+                                    return (
+                                      (m.title &&
+                                        m.title
+                                          .toLowerCase()
+                                          .includes(qStr)) ||
+                                      (m.url &&
+                                        m.url.toLowerCase().includes(qStr)) ||
+                                      (m.reasonDescription &&
+                                        m.reasonDescription
+                                          .toLowerCase()
+                                          .includes(qStr))
+                                    );
+                                  })
+                                  .map((m: any) => {
+                                    const isChecked =
+                                      selectedBrokenMovieIds.has(m.id);
+                                    const folder = folderMap.get(
+                                      m.parentFolderId
+                                    );
+                                    return c.jsxs(
+                                      "div",
+                                      {
+                                        className: `p-3 rounded-xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                                          isChecked
+                                            ? "bg-rose-950/40 border-rose-500/60 ring-1 ring-rose-500/30"
+                                            : "bg-slate-900/70 border-slate-800 hover:border-slate-700 opacity-80"
+                                        }`,
+                                        children: [
+                                          c.jsxs("div", {
+                                            className:
+                                              "flex items-start sm:items-center gap-3 min-w-0 flex-1",
+                                            children: [
+                                              // Custom Checkbox
+                                              c.jsx("button", {
+                                                type: "button",
+                                                onClick: () =>
+                                                  handleToggleSelectBroken(m.id),
+                                                className: `w-5 h-5 rounded-lg flex items-center justify-center border transition-all cursor-pointer shrink-0 mt-0.5 sm:mt-0 ${
+                                                  isChecked
+                                                    ? "bg-rose-600 border-rose-400 text-white shadow-sm"
+                                                    : "bg-slate-950 border-slate-700 text-transparent hover:border-rose-400"
+                                                }`,
+                                                title: isChecked
+                                                  ? "إلغاء التحديد"
+                                                  : "تحديد للحذف",
+                                                children: c.jsx(os, {
+                                                  className:
+                                                    "w-3.5 h-3.5 stroke-[3]",
+                                                }),
+                                              }),
+
+                                              // Poster or fallback
+                                              c.jsx("div", {
+                                                className:
+                                                  "w-11 h-14 rounded-lg bg-slate-950 border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center relative",
+                                                children: m.posterUrl
+                                                  ? c.jsx("img", {
+                                                      src: m.posterUrl,
+                                                      alt: m.title,
+                                                      className:
+                                                        "w-full h-full object-cover filter grayscale contrast-125",
+                                                      onError: (ev: any) => {
+                                                        ev.target.style.display =
+                                                          "none";
+                                                      },
+                                                    })
+                                                  : c.jsx(qs, {
+                                                      className:
+                                                        "w-5 h-5 text-slate-600",
+                                                    }),
+                                              }),
+
+                                              // Details
+                                              c.jsxs("div", {
+                                                className:
+                                                  "min-w-0 flex-1 space-y-1",
+                                                children: [
+                                                  c.jsxs("div", {
+                                                    className:
+                                                      "flex items-center gap-2 flex-wrap",
+                                                    children: [
+                                                      c.jsx("span", {
+                                                        className:
+                                                          "text-xs sm:text-sm font-black text-white truncate",
+                                                        children: m.title,
+                                                      }),
+                                                      folder &&
+                                                        c.jsxs("span", {
+                                                          className:
+                                                            "text-[10px] font-bold px-1.5 py-0.2 rounded bg-slate-950 text-slate-400 border border-slate-800",
+                                                          children: [
+                                                            "📁 ",
+                                                            folder.name,
+                                                          ],
+                                                        }),
+                                                    ],
+                                                  }),
+                                                  c.jsxs("div", {
+                                                    className:
+                                                      "flex items-center gap-1.5 flex-wrap",
+                                                    children: [
+                                                      c.jsxs("span", {
+                                                        className:
+                                                          "text-[10px] font-bold px-2 py-0.5 rounded-md bg-rose-950 text-rose-300 border border-rose-600/40 flex items-center gap-1",
+                                                        children: [
+                                                          c.jsx(Uo, {
+                                                            className:
+                                                              "w-3 h-3 text-rose-400",
+                                                          }),
+                                                          c.jsx("span", {
+                                                            children:
+                                                              m.reasonDescription ||
+                                                              "صفحة فارغة أو غير متاح",
+                                                          }),
+                                                        ],
+                                                      }),
+                                                      (m.url || m.embedUrl) &&
+                                                        c.jsx("span", {
+                                                          className:
+                                                            "text-[10px] font-mono text-slate-400 truncate max-w-[220px] bg-slate-950 px-1.5 py-0.5 rounded border border-slate-800/80",
+                                                          title:
+                                                            m.url ||
+                                                            m.embedUrl,
+                                                          children:
+                                                            m.url ||
+                                                            m.embedUrl,
+                                                        }),
+                                                    ],
+                                                  }),
+                                                ],
+                                              }),
+                                            ],
+                                          }),
+
+                                          // Action buttons
+                                          c.jsxs("div", {
+                                            className:
+                                              "flex items-center gap-2 shrink-0 justify-end",
+                                            children: [
+                                              (m.url || m.embedUrl) &&
+                                                c.jsxs("a", {
+                                                  href: m.url || m.embedUrl,
+                                                  target: "_blank",
+                                                  rel: "noopener noreferrer",
+                                                  className:
+                                                    "flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-bold transition-all cursor-pointer",
+                                                  title:
+                                                    "معاينة الرابط في صفحة مستقلة للتحقق منه",
+                                                  children: [
+                                                    c.jsx(Qv, {
+                                                      className: "w-3 h-3",
+                                                    }),
+                                                    c.jsx("span", {
+                                                      children: "معاينة 🔗",
+                                                    }),
+                                                  ],
+                                                }),
+                                              c.jsxs("button", {
+                                                type: "button",
+                                                onClick: () =>
+                                                  handleDeleteSingleBroken(
+                                                    m.id,
+                                                    m.title
+                                                  ),
+                                                className:
+                                                  "flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-950/60 hover:bg-rose-600 text-rose-300 hover:text-white border border-rose-500/40 text-xs font-bold transition-all cursor-pointer active:scale-95",
+                                                title:
+                                                  "حذف هذا العنصر الفردي فوراً",
+                                                children: [
+                                                  c.jsx(Hi, {
+                                                    className: "w-3 h-3",
+                                                  }),
+                                                  c.jsx("span", {
+                                                    children: "حذف",
+                                                  }),
+                                                ],
+                                              }),
+                                            ],
+                                          }),
+                                        ],
+                                      },
+                                      m.id
+                                    );
+                                  }),
+                              }),
+                            ],
+                          }),
+                      ],
+                    }),
+                ],
+              }),
+
                   (de === "all" || de === "repositories") &&
                     c.jsxs("div", {
                       className:
@@ -4295,6 +6023,18 @@ const E2 = ({
                                                     className: "w-3.5 h-3.5",
                                                   }),
                                                 }),
+                                              c.jsx("button", {
+                                                type: "button",
+                                                onClick: () =>
+                                                  handleExportSingleRepo(folder.id),
+                                                className:
+                                                  "p-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-300 border border-emerald-500/30 transition-all cursor-pointer active:scale-95",
+                                                title:
+                                                  "تصدير هذا المستودع بصيغة JSON مستقلة",
+                                                children: c.jsx(ga, {
+                                                  className: "w-3.5 h-3.5",
+                                                }),
+                                              }),
                                               onToggleIncludeInAllFavorites &&
                                                 c.jsx("button", {
                                                   type: "button",
@@ -5031,6 +6771,433 @@ const E2 = ({
                             }),
                           ],
                         }),
+
+                        // DEDICATED SUBSECTION: SINGLE REPOSITORY JSON EXPORT
+                        c.jsxs("div", {
+                          className:
+                            "mt-4 p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-slate-900 to-indigo-950/40 border-2 border-emerald-500/50 shadow-xl space-y-4",
+                          children: [
+                            // Header
+                            c.jsxs("div", {
+                              className:
+                                "flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-emerald-500/30 pb-3",
+                              children: [
+                                c.jsxs("div", {
+                                  className: "flex items-center gap-2.5",
+                                  children: [
+                                    c.jsx("div", {
+                                      className:
+                                        "p-2 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white shadow-md shadow-emerald-500/30",
+                                      children: c.jsx(gm, {
+                                        className: "w-5 h-5 text-white",
+                                      }),
+                                    }),
+                                    c.jsxs("div", {
+                                      children: [
+                                        c.jsxs("h5", {
+                                          className:
+                                            "text-sm sm:text-base font-black text-white flex items-center gap-2 flex-wrap",
+                                          children: [
+                                            c.jsx("span", {
+                                              children:
+                                                "تصدير بيانات كل مستودع على حدة (JSON منفصل لكل مستودع)",
+                                            }),
+                                            c.jsx("span", {
+                                              className:
+                                                "px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-black",
+                                              children:
+                                                "نفس صيغة الاستيراد والتغذية 100%",
+                                            }),
+                                          ],
+                                        }),
+                                        c.jsx("p", {
+                                          className:
+                                            "text-xs text-emerald-200/80 font-normal mt-0.5",
+                                          children:
+                                            "تصدير ملف JSON مستقل لأي مستودع يحتوي على بيانات القسم وعناصره وروابطه. يمكنك إعادة استيراده أو تغذيته في التطبيق مباشرة دون أي تعديل.",
+                                        }),
+                                      ],
+                                    }),
+                                  ],
+                                }),
+                                c.jsxs("button", {
+                                  type: "button",
+                                  onClick: handleExportAllReposIndividually,
+                                  disabled:
+                                    isExportingBatch || activeFolders.length === 0,
+                                  className:
+                                    "flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-indigo-600 hover:from-emerald-500 hover:to-indigo-500 text-white font-black text-xs shadow-md transition-all cursor-pointer active:scale-95 disabled:opacity-50 whitespace-nowrap",
+                                  title:
+                                    "تنزيل ملف JSON منفصل لكل مستودع بالتتابع للمكتبة بالكامل",
+                                  children: [
+                                    isExportingBatch
+                                      ? c.jsx(Fr, {
+                                          className: "w-4 h-4 animate-spin",
+                                        })
+                                      : c.jsx(ga, { className: "w-4 h-4" }),
+                                    c.jsx("span", {
+                                      children: isExportingBatch
+                                        ? "جاري التصدير المتتابع..."
+                                        : "تصدير كافة المستودعات ملفاً بملف",
+                                    }),
+                                    c.jsxs("span", {
+                                      className:
+                                        "px-1.5 py-0.5 rounded bg-black/40 text-[10px] font-mono",
+                                      children: [
+                                        activeFolders.length,
+                                        " ملف",
+                                      ],
+                                    }),
+                                  ],
+                                }),
+                              ],
+                            }),
+
+                            // Notice banner if available
+                            lastExportNotice &&
+                              c.jsxs("div", {
+                                className:
+                                  "p-3 rounded-xl bg-emerald-950/80 border border-emerald-500/60 text-emerald-300 text-xs font-bold flex items-center justify-between gap-2 animate-in fade-in shadow-inner",
+                                children: [
+                                  c.jsxs("div", {
+                                    className: "flex items-center gap-2",
+                                    children: [
+                                      c.jsx(ya, {
+                                        className:
+                                          "w-4 h-4 text-emerald-400 shrink-0",
+                                      }),
+                                      c.jsx("span", {
+                                        children: lastExportNotice,
+                                      }),
+                                    ],
+                                  }),
+                                  c.jsx("button", {
+                                    type: "button",
+                                    onClick: () => setLastExportNotice(null),
+                                    className:
+                                      "text-emerald-400 hover:text-white text-xs px-2 py-0.5 rounded hover:bg-emerald-900/50 cursor-pointer",
+                                    children: "✕",
+                                  }),
+                                ],
+                              }),
+
+                            // Quick Selector & Export Bar
+                            c.jsxs("div", {
+                              className:
+                                "p-3.5 rounded-xl bg-slate-950/90 border border-emerald-500/30 space-y-2.5",
+                              children: [
+                                c.jsxs("label", {
+                                  className:
+                                    "text-xs font-black text-emerald-300 flex items-center justify-between",
+                                  children: [
+                                    c.jsx("span", {
+                                      children:
+                                        "اختيار سريع للمستودع وتصديره فوراً:",
+                                    }),
+                                    c.jsx("span", {
+                                      className:
+                                        "text-[10px] text-slate-400 font-normal",
+                                      children:
+                                        "ينتج ملف JSON بنفس صيغة استيراد الأقسام",
+                                    }),
+                                  ],
+                                }),
+                                c.jsxs("div", {
+                                  className:
+                                    "flex flex-col sm:flex-row gap-2.5",
+                                  children: [
+                                    c.jsx("select", {
+                                      value:
+                                        singleExportFolderId ||
+                                        (activeFolders[0]?.id || ""),
+                                      onChange: (ev) =>
+                                        setSingleExportFolderId(
+                                          ev.target.value
+                                        ),
+                                      className:
+                                        "flex-1 px-3.5 py-2 text-xs bg-slate-900 text-white rounded-xl border border-emerald-500/40 focus:outline-none focus:border-emerald-400 font-bold cursor-pointer",
+                                      children: activeFolders.map((f) => {
+                                        const zCfg = getRepoZoneConfig(
+                                          getFolderZone(f)
+                                        );
+                                        const count =
+                                          movieCountMap[f.id] || 0;
+                                        return c.jsx(
+                                          "option",
+                                          {
+                                            value: f.id,
+                                            className:
+                                              "bg-slate-900 text-white py-1",
+                                            children: `[${zCfg.name}] ${f.name} (${count} عنصر)`,
+                                          },
+                                          f.id
+                                        );
+                                      }),
+                                    }),
+                                    c.jsxs("button", {
+                                      type: "button",
+                                      onClick: () => {
+                                        const targetId =
+                                          singleExportFolderId ||
+                                          (activeFolders[0]?.id || "");
+                                        if (targetId)
+                                          handleExportSingleRepo(targetId);
+                                      },
+                                      disabled: activeFolders.length === 0,
+                                      className:
+                                        "px-5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-black text-xs transition-all shadow-md cursor-pointer whitespace-nowrap active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5",
+                                      children: [
+                                        c.jsx(ga, {
+                                          className: "w-4 h-4 stroke-[2.5]",
+                                        }),
+                                        c.jsx("span", {
+                                          children:
+                                            "تصدير هذا المستودع (JSON) 📥",
+                                        }),
+                                      ],
+                                    }),
+                                  ],
+                                }),
+                              ],
+                            }),
+
+                            // Interactive Directory with Search and Zone Filter
+                            c.jsxs("div", {
+                              className: "space-y-2.5 pt-1",
+                              children: [
+                                c.jsxs("div", {
+                                  className:
+                                    "flex flex-col sm:flex-row sm:items-center justify-between gap-2",
+                                  children: [
+                                    c.jsxs("div", {
+                                      className:
+                                        "flex items-center gap-2",
+                                      children: [
+                                        c.jsx(pm, {
+                                          className:
+                                            "w-4 h-4 text-emerald-400",
+                                        }),
+                                        c.jsx("span", {
+                                          className:
+                                            "text-xs font-black text-white",
+                                          children:
+                                            "قائمة المستودعات المتاحة للتصدير الفردي:",
+                                        }),
+                                        c.jsxs("span", {
+                                          className:
+                                            "text-[10px] text-emerald-300 font-mono bg-emerald-950 px-2 py-0.5 rounded-full border border-emerald-500/30",
+                                          children: [
+                                            singleExportFilteredFolders.length,
+                                            " مستودع",
+                                          ],
+                                        }),
+                                      ],
+                                    }),
+                                    c.jsxs("div", {
+                                      className:
+                                        "relative w-full sm:w-56",
+                                      children: [
+                                        c.jsx($i, {
+                                          className:
+                                            "w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2",
+                                        }),
+                                        c.jsx("input", {
+                                          type: "text",
+                                          value: singleExportSearch,
+                                          onChange: (ev) =>
+                                            setSingleExportSearch(
+                                              ev.target.value
+                                            ),
+                                          placeholder: "بحث في المستودعات...",
+                                          className:
+                                            "w-full pl-8 pr-3 py-1 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500",
+                                        }),
+                                        singleExportSearch &&
+                                          c.jsx("button", {
+                                            type: "button",
+                                            onClick: () =>
+                                              setSingleExportSearch(""),
+                                            className:
+                                              "absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs",
+                                            children: "✕",
+                                          }),
+                                      ],
+                                    }),
+                                  ],
+                                }),
+
+                                // Zone Filters
+                                c.jsxs("div", {
+                                  className:
+                                    "flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1",
+                                  children: [
+                                    c.jsxs("button", {
+                                      type: "button",
+                                      onClick: () =>
+                                        setSingleExportZoneFilter("all"),
+                                      className: `flex items-center gap-1.5 px-3 py-1 rounded-xl text-[11px] font-black transition-all cursor-pointer whitespace-nowrap ${
+                                        singleExportZoneFilter === "all"
+                                          ? "bg-emerald-600 text-white shadow-md ring-2 ring-emerald-400/50"
+                                          : "bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border border-slate-800"
+                                      }`,
+                                      children: [
+                                        c.jsx("span", {
+                                          children: "كافة المناطق",
+                                        }),
+                                        c.jsx("span", {
+                                          className:
+                                            "px-1.5 py-0.2 rounded-full bg-black/40 text-[9px] font-mono",
+                                          children: activeFolders.length,
+                                        }),
+                                      ],
+                                    }),
+                                    REPO_ZONES.map((z) => {
+                                      const isSelected =
+                                        singleExportZoneFilter === z.id;
+                                      const count =
+                                        settingsZoneCounts[z.id] || 0;
+                                      return c.jsxs(
+                                        "button",
+                                        {
+                                          type: "button",
+                                          onClick: () =>
+                                            setSingleExportZoneFilter(
+                                              isSelected
+                                                ? "all"
+                                                : (z.id as RepoZoneId)
+                                            ),
+                                          className: `flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-black transition-all cursor-pointer whitespace-nowrap border ${
+                                            isSelected
+                                              ? `${z.buttonBg} ${z.buttonText} ${z.borderColor} shadow-sm ring-2 ring-current/40`
+                                              : "bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800 border-slate-800"
+                                          }`,
+                                          children: [
+                                            c.jsx("span", {
+                                              className: `w-2 h-2 rounded-full ${z.dotColor}`,
+                                            }),
+                                            c.jsx("span", {
+                                              children: z.name,
+                                            }),
+                                            c.jsx("span", {
+                                              className:
+                                                "px-1.5 py-0.2 rounded-full bg-black/40 text-[9px] font-mono",
+                                              children: count,
+                                            }),
+                                          ],
+                                        },
+                                        z.id
+                                      );
+                                    }),
+                                  ],
+                                }),
+
+                                // Repositories List
+                                c.jsx("div", {
+                                  className:
+                                    "space-y-2 max-h-[320px] overflow-y-auto custom-scrollbar p-1",
+                                  children:
+                                    singleExportFilteredFolders.length === 0
+                                      ? c.jsxs("div", {
+                                          className:
+                                            "py-6 text-center bg-slate-950/60 rounded-xl border border-dashed border-slate-800 space-y-1.5",
+                                          children: [
+                                            c.jsx(gm, {
+                                              className:
+                                                "w-7 h-7 text-slate-600 mx-auto",
+                                            }),
+                                            c.jsx("p", {
+                                              className:
+                                                "text-xs font-bold text-slate-400",
+                                              children:
+                                                "لا توجد مستودعات مطابقة للبحث أو التصفية.",
+                                            }),
+                                          ],
+                                        })
+                                      : singleExportFilteredFolders.map((f) => {
+                                          const fZone = getFolderZone(f);
+                                          const zCfg = getRepoZoneConfig(fZone);
+                                          const count =
+                                            movieCountMap[f.id] || 0;
+                                          return c.jsxs(
+                                            "div",
+                                            {
+                                              className:
+                                                "p-2.5 sm:p-3 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-emerald-500/40 transition-all flex items-center justify-between gap-2.5 group",
+                                              children: [
+                                                c.jsxs("div", {
+                                                  className:
+                                                    "flex items-center gap-2.5 min-w-0 flex-1",
+                                                  children: [
+                                                    c.jsx("span", {
+                                                      className: `w-3 h-3 rounded-full ${zCfg.dotColor} shrink-0 shadow-sm`,
+                                                      title: zCfg.name,
+                                                    }),
+                                                    c.jsxs("div", {
+                                                      className:
+                                                        "min-w-0 flex-1",
+                                                      children: [
+                                                        c.jsxs("div", {
+                                                          className:
+                                                            "flex items-center gap-2 flex-wrap",
+                                                          children: [
+                                                            c.jsx("span", {
+                                                              className:
+                                                                "text-xs sm:text-sm font-bold text-white truncate",
+                                                              children: f.name,
+                                                            }),
+                                                            c.jsx("span", {
+                                                              className: `text-[10px] font-bold px-1.5 py-0.2 rounded-md ${zCfg.badgeBg} ${zCfg.badgeText} border ${zCfg.badgeBorder}`,
+                                                              children:
+                                                                zCfg.name,
+                                                            }),
+                                                            c.jsxs("span", {
+                                                              className:
+                                                                "text-[10px] font-mono text-emerald-300 bg-emerald-950/60 px-1.5 py-0.2 rounded border border-emerald-500/30",
+                                                              children: [
+                                                                count,
+                                                                " عنصر",
+                                                              ],
+                                                            }),
+                                                          ],
+                                                        }),
+                                                        f.description &&
+                                                          c.jsx("p", {
+                                                            className:
+                                                              "text-[11px] text-slate-400 truncate mt-0.5",
+                                                            children:
+                                                              f.description,
+                                                          }),
+                                                      ],
+                                                    }),
+                                                  ],
+                                                }),
+                                                c.jsxs("button", {
+                                                  type: "button",
+                                                  onClick: () =>
+                                                    handleExportSingleRepo(f.id),
+                                                  className:
+                                                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white border border-emerald-500/40 text-xs font-black transition-all cursor-pointer active:scale-95 shrink-0 shadow-sm",
+                                                  title: `تصدير مستودع "${f.name}" بصيغة JSON مستقلة`,
+                                                  children: [
+                                                    c.jsx(ga, {
+                                                      className: "w-3.5 h-3.5",
+                                                    }),
+                                                    c.jsx("span", {
+                                                      children:
+                                                        "تصدير JSON 📥",
+                                                    }),
+                                                  ],
+                                                }),
+                                              ],
+                                            },
+                                            f.id
+                                          );
+                                        }),
+                                }),
+                              ],
+                            }),
+                          ],
+                        }),
                       ],
                     }),
                   (de === "all" || de === "display") &&
@@ -5164,8 +7331,102 @@ const E2 = ({
               }),
             ],
           }),
-        })
-      : null;
+          confirmDeleteDialog &&
+            confirmDeleteDialog.isOpen &&
+            c.jsx("div", {
+              className:
+                "fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-150 dir-rtl",
+              children: c.jsxs("div", {
+                className:
+                  "bg-slate-900 border-2 border-rose-500/80 rounded-2xl p-5 sm:p-6 max-w-lg w-full shadow-2xl space-y-4 text-right animate-in zoom-in-95 duration-150 relative",
+                children: [
+                  c.jsxs("div", {
+                    className: "flex items-start gap-3",
+                    children: [
+                      c.jsx("div", {
+                        className:
+                          "w-12 h-12 rounded-2xl bg-rose-600/20 border border-rose-500/50 flex items-center justify-center text-rose-400 shrink-0 shadow-inner",
+                        children: c.jsx(Hi, {
+                          className: "w-6 h-6 stroke-[2.5]",
+                        }),
+                      }),
+                      c.jsxs("div", {
+                        className: "min-w-0 flex-1",
+                        children: [
+                          c.jsx("h4", {
+                            className:
+                              "text-base sm:text-lg font-black text-white",
+                            children: confirmDeleteDialog.title,
+                          }),
+                          c.jsx("p", {
+                            className:
+                              "text-xs font-bold text-rose-300 mt-0.5",
+                            children: confirmDeleteDialog.subtitle,
+                          }),
+                        ],
+                      }),
+                      c.jsx("button", {
+                        type: "button",
+                        onClick: () => setConfirmDeleteDialog(null),
+                        className:
+                          "text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer",
+                        children: c.jsx(cs, { className: "w-5 h-5" }),
+                      }),
+                    ],
+                  }),
+                  confirmDeleteDialog.details &&
+                    c.jsx("div", {
+                      className:
+                        "p-3.5 rounded-xl bg-rose-950/40 border border-rose-500/30 text-rose-200 text-xs font-medium leading-relaxed whitespace-pre-line",
+                      children: confirmDeleteDialog.details,
+                    }),
+                  c.jsxs("div", {
+                    className:
+                      "p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs",
+                    children: [
+                      c.jsx("span", {
+                        className: "text-slate-400 font-bold",
+                        children: "عدد العناصر المطلوب حذفها نهائياً:",
+                      }),
+                      c.jsxs("span", {
+                        className:
+                          "px-2.5 py-0.5 rounded-lg bg-rose-600 text-white font-mono font-black",
+                        children: [confirmDeleteDialog.count, " عنصر"],
+                      }),
+                    ],
+                  }),
+                  c.jsxs("div", {
+                    className: "flex items-center gap-3 pt-2",
+                    children: [
+                      c.jsxs("button", {
+                        type: "button",
+                        onClick: confirmDeleteDialog.onConfirm,
+                        className:
+                          "flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-gradient-to-r from-rose-600 via-rose-500 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-rose-950/80 transition-all cursor-pointer active:scale-95 border border-rose-400/40",
+                        children: [
+                          c.jsx(Hi, {
+                            className: "w-4 h-4 stroke-[2.5]",
+                          }),
+                          c.jsx("span", {
+                            children: "تأكيد الحذف نهائياً 🗑️",
+                          }),
+                        ],
+                      }),
+                      c.jsx("button", {
+                        type: "button",
+                        onClick: () => setConfirmDeleteDialog(null),
+                        className:
+                          "py-3 px-5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs sm:text-sm transition-colors cursor-pointer",
+                        children: "إلغاء",
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+            }),
+        ],
+      })
+    : null;
   },
   T2 = ({
     viewMode: l,
@@ -6179,6 +8440,9 @@ const C2 = ({
     folderColor: i,
     isAllFavorites: r = !1,
     isInCinemaPlaylist: isInPlaylist = !1,
+    isSelected = !1,
+    isMultiSelectMode = !1,
+    onToggleSelect,
     onOpenMovie: a,
     onExtractStreams: d,
     onToggleFavorite: u,
@@ -6345,10 +8609,24 @@ const C2 = ({
       Ae = A2(l.description),
       displayStory = (A2(l.storySummary) || Ae).trim(),
       be = (le) => {
-        le.target.closest("button") || a(l);
+        if (le.target.closest("button") || le.target.closest("a")) return;
+        if (le.ctrlKey || le.metaKey || le.shiftKey || isMultiSelectMode) {
+          le.preventDefault();
+          le.stopPropagation();
+          onToggleSelect && onToggleSelect(l.id, le.shiftKey);
+          return;
+        }
+        a(l);
       },
       ge = (le) => {
-        (le.key === "Enter" || le.key === " ") && (le.preventDefault(), a(l));
+        if (le.key === "Enter" || le.key === " ") {
+          le.preventDefault();
+          if (le.ctrlKey || le.metaKey || le.shiftKey || isMultiSelectMode) {
+            onToggleSelect && onToggleSelect(l.id, le.shiftKey);
+            return;
+          }
+          a(l);
+        }
       },
       Re = (le) => {
         le.stopPropagation();
@@ -6372,11 +8650,22 @@ const C2 = ({
       tabIndex: 0,
       onClick: be,
       onKeyDown: ge,
-      className: `group relative bg-slate-850 hover:bg-slate-800 rounded-xl overflow-hidden transition-all duration-300 flex flex-col justify-between cursor-pointer focus:ring-4 focus:ring-purple-500/80 focus:border-purple-400 focus:scale-[1.015] focus:z-20 focus:outline-none ${J.cardBorder} ${J.cardGlow}`,
+      className: `group relative bg-slate-850 hover:bg-slate-800 rounded-xl overflow-hidden transition-all duration-200 flex flex-col justify-between cursor-pointer focus:ring-4 focus:ring-purple-500/80 focus:border-purple-400 focus:scale-[1.015] focus:z-20 focus:outline-none ${
+        isSelected
+          ? "ring-4 ring-amber-400 border-2 border-amber-300 bg-amber-950/40 shadow-2xl shadow-amber-500/30 scale-[0.985]"
+          : `${J.cardBorder} ${J.cardGlow}`
+      }`,
       children: [
         c.jsxs("div", {
           onClick: (le) => {
-            (le.stopPropagation(), a(l));
+            if (le.ctrlKey || le.metaKey || le.shiftKey || isMultiSelectMode) {
+              le.preventDefault();
+              le.stopPropagation();
+              onToggleSelect && onToggleSelect(l.id, le.shiftKey);
+              return;
+            }
+            le.stopPropagation();
+            a(l);
           },
           title: `فتح "${re}" في المتصفح`,
           className:
@@ -6413,6 +8702,33 @@ const C2 = ({
                 c.jsxs("div", {
                   className: "flex items-center gap-1",
                   children: [
+                    c.jsx("button", {
+                      type: "button",
+                      id: `btn-select-movie-${l.id}`,
+                      onClick: (le) => {
+                        le.stopPropagation();
+                        onToggleSelect && onToggleSelect(l.id, le.shiftKey);
+                      },
+                      title: isSelected
+                        ? "إلغاء تحديد هذا الفيلم"
+                        : "تحديد هذا الفيلم (أو اضغط Ctrl + كليك أثناء التمرير)",
+                      className: `p-1 sm:p-1.5 rounded-full backdrop-blur-md transition-all active:scale-90 cursor-pointer flex items-center justify-center flex-shrink-0 z-20 ${
+                        isSelected
+                          ? "bg-amber-400 text-slate-950 ring-2 ring-amber-300 shadow-lg shadow-amber-500/50 scale-105"
+                          : isMultiSelectMode
+                            ? "bg-slate-950/90 text-slate-400 hover:text-white border border-slate-700/80 shadow-md"
+                            : "opacity-0 group-hover:opacity-100 bg-slate-950/80 text-slate-300 hover:text-amber-300 border border-slate-700/70"
+                      }`,
+                      children: isSelected
+                        ? c.jsx(wo, { className: "w-3.5 h-3.5 sm:w-4 sm:h-4 stroke-[2.5]" })
+                        : c.jsx(qd, { className: "w-3.5 h-3.5 sm:w-4 sm:h-4" }),
+                    }),
+                    isSelected &&
+                      c.jsx("span", {
+                        className:
+                          "px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 font-black text-[10px] shadow-sm select-none",
+                        children: "محدد ✓",
+                      }),
                     e !== void 0 &&
                       c.jsxs("button", {
                         type: "button",
@@ -7914,6 +10230,12 @@ const C2 = ({
     onOpenDatabaseModal: onOpenDbModal,
     onSyncFavoritesToDb: onSyncFavsToDb,
     onSyncFavoritesFromDb: onSyncFavsFromDb,
+    onBatchDeleteMovies,
+    onBatchMoveMovies,
+    onBatchChangeCategory,
+    onBatchAddToPlaylist,
+    onBatchToggleBroken,
+    onBatchToggleHide,
   }) => {
     var Ys, ai, Is, pi;
     const [K, B] = q.useState(""),
@@ -7922,6 +10244,10 @@ const C2 = ({
       [ae, $] = q.useState(!1),
       [U, P] = q.useState("all"),
       [Z, fe] = q.useState(1),
+      [selectedMovieIds, setSelectedMovieIds] = q.useState(new Set()),
+      [isMultiSelectMode, setIsMultiSelectMode] = q.useState(!1),
+      [batchModalMode, setBatchModalMode] = q.useState(null),
+      lastSelectedMovieIdRef = q.useRef(null),
       [ve, ye] = q.useState(!1),
       [_e, I] = q.useState(null),
       [ie, O] = q.useState(!1),
@@ -8172,7 +10498,69 @@ const C2 = ({
       Qt = () => {
         Xe(new Set());
       },
-      ri = () => {
+      handleToggleSelectMovie = (movieId, isShift) => {
+        setSelectedMovieIds((prev) => {
+          const next = new Set(prev);
+          if (isShift && lastSelectedMovieIdRef.current && lastSelectedMovieIdRef.current !== movieId) {
+            const lastIdx = Le.findIndex((m) => m.id === lastSelectedMovieIdRef.current);
+            const curIdx = Le.findIndex((m) => m.id === movieId);
+            if (lastIdx !== -1 && curIdx !== -1) {
+              const start = Math.min(lastIdx, curIdx);
+              const end = Math.max(lastIdx, curIdx);
+              for (let idx = start; idx <= end; idx++) {
+                if (Le[idx]?.id) next.add(Le[idx].id);
+              }
+              lastSelectedMovieIdRef.current = movieId;
+              return next;
+            }
+          }
+          if (next.has(movieId)) {
+            next.delete(movieId);
+          } else {
+            next.add(movieId);
+          }
+          lastSelectedMovieIdRef.current = movieId;
+          return next;
+        });
+      },
+      handleSelectAllOnPage = () => {
+        setSelectedMovieIds((prev) => {
+          const next = new Set(prev);
+          Le.forEach((m) => {
+            if (m?.id) next.add(m.id);
+          });
+          return next;
+        });
+      },
+      handleDeselectAll = () => {
+        setSelectedMovieIds(new Set());
+        lastSelectedMovieIdRef.current = null;
+      },
+      selectedMoviesList = q.useMemo(() => {
+        if (selectedMovieIds.size === 0) return [];
+        return r.filter((m) => selectedMovieIds.has(m.id));
+      }, [r, selectedMovieIds]);
+
+    q.useEffect(() => {
+      setSelectedMovieIds(new Set());
+      lastSelectedMovieIdRef.current = null;
+    }, [l == null ? void 0 : l.id]);
+
+    q.useEffect(() => {
+      const handleGlobalKeyDown = (e) => {
+        if (e.key === "Escape") {
+          if (batchModalMode) {
+            setBatchModalMode(null);
+          } else if (selectedMovieIds.size > 0) {
+            handleDeselectAll();
+          }
+        }
+      };
+      window.addEventListener("keydown", handleGlobalKeyDown);
+      return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+    }, [selectedMovieIds.size, batchModalMode]);
+
+    const ri = () => {
         Xe(new Set(tt.map((Q) => Q.id)));
       },
       pt = () => {
@@ -9344,6 +11732,36 @@ const C2 = ({
                             }),
                           ],
                         }),
+                      ],
+                    }),
+                    c.jsxs("button", {
+                      id: "btn-multi-select-toggle",
+                      type: "button",
+                      onClick: () => {
+                        setIsMultiSelectMode((prev) => {
+                          const next = !prev;
+                          if (!next && selectedMovieIds.size > 0) {
+                            setSelectedMovieIds(new Set());
+                          }
+                          return next;
+                        });
+                      },
+                      className: `flex items-center space-x-1.5 space-x-reverse px-3 py-1.5 rounded-lg transition-all duration-200 cursor-pointer active:scale-95 whitespace-nowrap text-xs font-black border ${
+                        isMultiSelectMode || selectedMovieIds.size > 0
+                          ? "bg-amber-400 text-slate-950 border-amber-300 shadow-md shadow-amber-500/30 ring-2 ring-amber-300 scale-105"
+                          : "bg-slate-950 hover:bg-slate-900 text-slate-300 hover:text-amber-300 border-slate-700"
+                      }`,
+                      title: "تحديد متعدد: اضغط زر Ctrl وتمرير السكرول مع النقر بالماوس لتحديد العناصر دفعة واحدة",
+                      children: [
+                        isMultiSelectMode || selectedMovieIds.size > 0
+                          ? c.jsx(wo, { className: "w-4 h-4 stroke-[2.5]" })
+                          : c.jsx(qd, { className: "w-4 h-4" }),
+                        c.jsx("span", { children: "تحديد متعدد" }),
+                        selectedMovieIds.size > 0 &&
+                          c.jsx("span", {
+                            className: "px-1.5 py-0.2 rounded-full bg-slate-950 text-amber-300 font-mono text-[10px]",
+                            children: selectedMovieIds.size,
+                          }),
                       ],
                     }),
                     c.jsxs("button", {
@@ -10604,6 +13022,9 @@ const C2 = ({
                         folderColor: zt,
                         isAllFavorites: (l == null ? void 0 : l.id) === Pt,
                         isInCinemaPlaylist: isMovieInCinemaPlaylist(Q, cinemaPl),
+                        isSelected: selectedMovieIds.has(Q.id),
+                        isMultiSelectMode: isMultiSelectMode || selectedMovieIds.size > 0,
+                        onToggleSelect: handleToggleSelectMovie,
                         onSelectFolder: t,
                         onOpenMovie: a,
                         onExtractStreams: d,
@@ -10706,6 +13127,147 @@ const C2 = ({
                         : pi.name) || "أقسام المفضلة",
                 onReorder: (Q, Me) => {
                   F && F(Q, Me, U);
+                },
+              }),
+            selectedMovieIds.size > 0 &&
+              c.jsx("div", {
+                className:
+                  "fixed bottom-4 sm:bottom-6 inset-x-3 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 z-50 animate-in slide-in-from-bottom-5 duration-200 pointer-events-auto",
+                children: c.jsxs("div", {
+                  className:
+                    "bg-slate-900/98 backdrop-blur-xl border-2 border-amber-500/80 rounded-2xl shadow-[0_12px_45px_rgba(0,0,0,0.9)] p-2 sm:p-2.5 flex items-center flex-wrap gap-2 dir-rtl text-right ring-2 ring-black/60",
+                  children: [
+                    c.jsxs("div", {
+                      className:
+                        "flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-amber-300",
+                      children: [
+                        c.jsx(wo, { className: "w-4 h-4 text-amber-400 stroke-[2.5]" }),
+                        c.jsxs("span", {
+                          className: "text-xs sm:text-sm font-black whitespace-nowrap",
+                          children: ["تم تحديد (", selectedMovieIds.size, ") أفلام"],
+                        }),
+                      ],
+                    }),
+                    c.jsxs("button", {
+                      type: "button",
+                      onClick: handleSelectAllOnPage,
+                      className:
+                        "px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white text-xs font-bold transition-all cursor-pointer active:scale-95 whitespace-nowrap border border-slate-700",
+                      title: "تحديد كافة أفلام هذه الصفحة المعروضة",
+                      children: ["تحديد الكل بالصفحة (", Le.length, ")"],
+                    }),
+                    c.jsx("button", {
+                      type: "button",
+                      onClick: handleDeselectAll,
+                      className:
+                        "px-2.5 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-slate-200 text-xs font-medium transition-all cursor-pointer active:scale-95 whitespace-nowrap",
+                      title: "إلغاء التحديد (Esc)",
+                      children: "إلغاء التحديد",
+                    }),
+                    c.jsx("div", {
+                      className: "h-6 w-px bg-slate-700 mx-0.5 hidden sm:block",
+                    }),
+                    c.jsxs("button", {
+                      type: "button",
+                      onClick: () => setBatchModalMode("delete"),
+                      className:
+                        "flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-red-600 via-rose-600 to-red-500 hover:from-red-500 hover:to-rose-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-red-950/60 border border-red-400/50 transition-all cursor-pointer active:scale-95 whitespace-nowrap",
+                      title: "حذف كافة العناصر المختارة دفعة واحدة",
+                      children: [
+                        c.jsx(Hi, { className: "w-4 h-4 stroke-[2.5]" }),
+                        c.jsxs("span", {
+                          children: ["حذف جماعي (", selectedMovieIds.size, ") 🗑️"],
+                        }),
+                      ],
+                    }),
+                    c.jsxs("button", {
+                      type: "button",
+                      onClick: () => setBatchModalMode("edit"),
+                      className:
+                        "flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs sm:text-sm shadow-lg shadow-amber-950/50 border border-amber-300 transition-all cursor-pointer active:scale-95 whitespace-nowrap",
+                      title: "تعديل جماعي: نقل، تصنيف، مفضلة، أو شاشة العرض",
+                      children: [
+                        c.jsx(xm, { className: "w-4 h-4 stroke-[2.5]" }),
+                        c.jsxs("span", {
+                          children: ["تعديل جماعي (", selectedMovieIds.size, ") ⚙️"],
+                        }),
+                      ],
+                    }),
+                    c.jsxs("button", {
+                      type: "button",
+                      onClick: () => {
+                        if (onBatchAddToPlaylist) {
+                          onBatchAddToPlaylist(Array.from(selectedMovieIds));
+                        }
+                        handleDeselectAll();
+                      },
+                      className:
+                        "flex items-center gap-1 px-3 py-2 rounded-xl bg-purple-600/40 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-400/50 text-xs font-black transition-all cursor-pointer active:scale-95 whitespace-nowrap shadow-sm",
+                      title: "إضافة المحددة إلى قائمة تشغيل شاشة العرض والسينما",
+                      children: [
+                        c.jsx(Ci, { className: "w-4 h-4 text-amber-300" }),
+                        c.jsx("span", {
+                          className: "hidden md:inline",
+                          children: "إضافة للـ Playlist 🎬",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              }),
+            batchModalMode &&
+              c.jsx(BatchActionModal, {
+                isOpen: !!batchModalMode,
+                mode: batchModalMode,
+                selectedMovies: selectedMoviesList,
+                folders: e,
+                cinemaPlaylists: cinemaPlaylistsList,
+                onClose: () => setBatchModalMode(null),
+                onConfirmDelete: (mIds) => {
+                  if (onBatchDeleteMovies) {
+                    onBatchDeleteMovies(mIds);
+                  } else {
+                    mIds.forEach((mid) => y && y(mid));
+                  }
+                  handleDeselectAll();
+                },
+                onBatchMove: (mIds, targetFolderId) => {
+                  if (onBatchMoveMovies) {
+                    onBatchMoveMovies(mIds, targetFolderId);
+                  }
+                  handleDeselectAll();
+                },
+                onBatchChangeCategory: (mIds, newCategory) => {
+                  if (onBatchChangeCategory) {
+                    onBatchChangeCategory(mIds, newCategory);
+                  }
+                  handleDeselectAll();
+                },
+                onBatchSetFavorite: (mIds, favoriteColor) => {
+                  if (h) {
+                    h(mIds, favoriteColor);
+                  } else {
+                    mIds.forEach((mid) => u && u(mid, favoriteColor));
+                  }
+                  handleDeselectAll();
+                },
+                onBatchAddToPlaylist: (mIds, targetPlaylistId) => {
+                  if (onBatchAddToPlaylist) {
+                    onBatchAddToPlaylist(mIds, targetPlaylistId);
+                  }
+                  handleDeselectAll();
+                },
+                onBatchToggleBroken: (mIds, isBroken) => {
+                  if (onBatchToggleBroken) {
+                    onBatchToggleBroken(mIds, isBroken);
+                  }
+                  handleDeselectAll();
+                },
+                onBatchToggleHide: (mIds, isHidden) => {
+                  if (onBatchToggleHide) {
+                    onBatchToggleHide(mIds, isHidden);
+                  }
+                  handleDeselectAll();
                 },
               }),
           ],
@@ -18447,7 +21009,21 @@ function Z2(l) {
     ? l.default
     : l;
 }
-const GI=({isOpen:l,onClose:e,movie:t,initialUrl:i,onAddToPlaylist:r,onUpdatePlaylist,onPlayNow:a,currentPlaylist:d,onOpenCinemaScreen:u})=>{const[h,m]=q.useState(""),[g,p]=q.useState(""),[y,v]=q.useState(""),[S,E]=q.useState(!1),[T,C]=q.useState(null),[L,A]=q.useState([]),[_,k]=q.useState(null),[j,M]=q.useState(new Set),[F,K]=q.useState(null),[B,H]=q.useState("direct"),[W,he]=q.useState(null),[de,ae]=q.useState(null),[dupWarning,setDupWarning]=q.useState(null),[$,U]=q.useState(!1),P=q.useRef(null),Z=q.useRef(null);q.useEffect(()=>{if(l){const O=((t==null?void 0:t.url)||(t==null?void 0:t.embedUrl)||(t==null?void 0:t.originalUrl)||i||"").trim(),targetTitle=(t==null?void 0:t.title)||(t==null?void 0:t.movieTitle)||"";m(O),p(targetTitle),v((t==null?void 0:t.posterUrl)||""),C(null),A([]),K(null),he(null),ae(null),setDupWarning(null),O&&fe(O,targetTitle)}else K(null),setDupWarning(null),Z.current&&(Z.current.destroy(),Z.current=null)},[l,t,i]),q.useEffect(()=>{const O=new Set;(d||[]).forEach(D=>{if(!D)return;if(D.selectedStream){if(D.selectedStream.url)O.add(D.selectedStream.url);if(D.selectedStream.id)O.add(D.selectedStream.id);if(D.selectedStream.directUrl)O.add(D.selectedStream.directUrl);}if(D.url)O.add(D.url);if(D.directUrl)O.add(D.directUrl);if(D.originalUrl)O.add(D.originalUrl);});M(O)},[d]),q.useEffect(()=>{if(!F){Z.current&&(Z.current.destroy(),Z.current=null);return}const O=(F.url||F.directUrl||"").trim();const isYt=!!(F.isYouTube||F.youtubeId||O.includes("youtube")||O.includes("youtu.be")||(h&&(h.includes("youtube")||h.includes("youtu.be"))));if(isYt&&B!=="embed"){H("embed");return;}if(he(null),B==="embed"||F.type==="embed"||isYt){Z.current&&(Z.current.destroy(),Z.current=null);return}const D=P.current;if(!D)return;if(Z.current&&(Z.current.destroy(),Z.current=null),O.includes(".m3u8")||O.includes("/hls/")||F.type==="hls")if(Cs.isSupported()){const re=new Cs({enableWorker:!0,lowLatencyMode:!0,backBufferLength:60});Z.current=re,re.loadSource(O),re.attachMedia(D),re.on(Cs.Events.MANIFEST_PARSED,()=>{D.play().catch(()=>{D.muted=!0,U(!0),D.play().catch(()=>{})})}),re.on(Cs.Events.ERROR,(Ae,be)=>{if(be.fatal)switch(console.warn("[Preview Player] HLS error:",be.type),be.type){case Cs.ErrorTypes.NETWORK_ERROR:if(O.startsWith("/api/stream-proxy")){he("تم التحويل تلقائياً لمشغل السيرفر المدمج المحمي ⚡");H("embed");}else{const ge=`/api/stream-proxy?url=${encodeURIComponent(O)}`;re.loadSource(ge),re.startLoad()}break;case Cs.ErrorTypes.MEDIA_ERROR:re.recoverMediaError();break;default:re.destroy();he("تم التحويل تلقائياً لمشغل السيرفر المدمج المحمي ⚡");H("embed");break}})}else D.canPlayType("application/vnd.apple.mpegurl")?(D.src=O,D.play().catch(()=>{D.muted=!0,U(!0),D.play().catch(()=>{})})):H("embed");else D.src=O,D.play().catch(()=>{D.muted=!0,U(!0),D.play().catch(()=>{})});return()=>{Z.current&&(Z.current.destroy(),Z.current=null)}},[F,B]);const fe=async(O,D)=>{if(!O||!O.trim()){C("يرجى إدخال رابط الفيلم أو الصفحة.");return}E(!0),C(null),A([]),K(null);let J=null;for(let attempt=0;attempt<2;attempt++){try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),12000);J=await fetch("/api/extract-video",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:O.trim(),title:D||g}),signal:controller.signal});clearTimeout(timer);if(J&&J.ok)break;}catch(netErr){if(attempt===1)J=null;else await new Promise(r=>setTimeout(r,500));}}try{if(!J)throw new Error("تعذر الاتصال بخادم الاستخراج.");let re;try{const rawText=await J.text();re=JSON.parse(rawText);}catch(_){throw new Error("تعذر قراءة بيانات السيرفرات من هذا الرابط.");}if(!J.ok||!re.success)throw new Error(re.error||"فشل استخراج الروابط من هذا الموقع.");re.title&&!g&&p(re.title),re.poster&&!y&&v(re.poster);const sortedStreams=sortStreamsAscending(re.streams||[]);A(sortedStreams);if(sortedStreams&&sortedStreams.length>0){const pref=getStreamPreference(O);const chosen=(pref?findMatchingStream(sortedStreams,pref):null)||pickDefaultQualityStream(sortedStreams);K(chosen);const isYtStream=!!(chosen&&(chosen.isYouTube||chosen.youtubeId||(chosen.url&&(chosen.url.includes("youtube")||chosen.url.includes("youtu.be")))||(chosen.directUrl&&(chosen.directUrl.includes("youtube")||chosen.directUrl.includes("youtu.be")))||(O&&(O.includes("youtube")||O.includes("youtu.be")))));const mode=isYtStream?"embed":((pref&&pref.playbackMode)?pref.playbackMode:(chosen.type==="embed"?"embed":"direct"));H(mode);}else{C("لم يتم العثور على سيرفرات بث مباشرة في هذه الصفحة.");}}catch(err){console.warn("[Video Extractor Warning]:",err?.message||err);const cleanO=O.trim();const fallbackStream={id:`stream-fallback-${Date.now()}`,server:"مشغل المعاينة المباشر ⚡",quality:"1080p FHD",type:"embed",url:`/api/embed-proxy?url=${encodeURIComponent(cleanO)}`,directUrl:cleanO,preferred:!0};A([fallbackStream]);K(fallbackStream);H("embed");C((err==null?void 0:err.message)||"تم توفير مشغل احتياطي لصفحة الفيلم للمعاينة المباشرة.");}finally{E(!1)}},ve=(O,D)=>{try{navigator.clipboard.writeText(O),k(D),setTimeout(()=>k(null),2e3)}catch(J){console.error("Failed to copy",J)}},ye=O=>{const candTitle=(g||(t==null?void 0:t.title)||(t==null?void 0:t.movieTitle)||"").trim();let resolvedT=candTitle&&candTitle!=="بدون عنوان"&&candTitle!=="فيلم بدون عنوان"?candTitle:"";if(!resolvedT){try{const u=new URL(h||O.url||"");const segs=u.pathname.split("/").filter(Boolean);const last=segs[segs.length-1]||"";const dec=decodeURIComponent(last).replace(/[-_+]/g," ").replace(/\.(html|php|mp4)$/i,"").trim();if(dec&&dec.length>1)resolvedT=dec;}catch(_){}}if(!resolvedT)resolvedT="فيلم سينمائي";return {id:`pl-${Date.now()}-${Math.random().toString(36).substr(2,6)}`,movieId:t==null?void 0:t.id,movieTitle:resolvedT,title:resolvedT,posterUrl:y||(t==null?void 0:t.posterUrl)||"",originalUrl:h||O.url,category:(t==null?void 0:t.category)||"سينما",selectedStream:{...O,preferredMode:(O.isYouTube||O.youtubeId||(O.url&&(O.url.includes("youtube")||O.url.includes("youtu.be")))||(O.directUrl&&(O.directUrl.includes("youtube")||O.directUrl.includes("youtu.be"))))?"embed":B},preferredMode:(O.isYouTube||O.youtubeId||(O.url&&(O.url.includes("youtube")||O.url.includes("youtu.be")))||(O.directUrl&&(O.directUrl.includes("youtube")||O.directUrl.includes("youtu.be"))))?"embed":B,selectedServer:O.server,selectedQuality:O.quality,selectedType:O.type,allStreams:sortStreamsAscending(L),addedAt:new Date().toISOString(),duration:t==null?void 0:t.duration};},findDuplicateIndex=O=>{const mTitle=(g||(t==null?void 0:t.title)||"").trim().toLowerCase(),mId=t==null?void 0:t.id,targetUrl=(h||(t==null?void 0:t.url)||(t==null?void 0:t.embedUrl)||"").trim(),nTargetUrl=targetUrl?normalizeVideoKey(targetUrl):"";return (d||[]).findIndex(it=>{if(!it)return!1;if(mId&&it.movieId&&it.movieId===mId)return!0;if(nTargetUrl&&it.originalUrl&&normalizeVideoKey(it.originalUrl)===nTargetUrl)return!0;if(O&&it.selectedStream&&(it.selectedStream.url===O.url||(O.directUrl&&it.selectedStream.directUrl===O.directUrl)))return!0;if(mTitle&&it.movieTitle&&it.movieTitle.trim().toLowerCase()===mTitle)return!0;return!1})},checkDuplicate=O=>{return findDuplicateIndex(O)!==-1},handleReplaceInPlaylist=(warningInfo)=>{if(!warningInfo)return;const targetStream=warningInfo.stream||F||(L&&L.length>0?L[0]:null);const isYtTarget=!!(targetStream&&(targetStream.isYouTube||targetStream.youtubeId||(targetStream.url&&(targetStream.url.includes("youtube")||targetStream.url.includes("youtu.be")))||(targetStream.directUrl&&(targetStream.directUrl.includes("youtube")||targetStream.directUrl.includes("youtu.be")))));const mode=isYtTarget?"embed":(targetStream?(targetStream.type==="embed"?"embed":B):B);const existingIdx=typeof warningInfo.existingIndex==="number"&&warningInfo.existingIndex>=0?warningInfo.existingIndex:findDuplicateIndex(targetStream);const existingItem=existingIdx!==-1&&existingIdx<d.length?d[existingIdx]:warningInfo.existingItem;const resolvedT=(g||(t&&t.title)||(existingItem&&(existingItem.movieTitle||existingItem.title))||"").trim()||"فيلم سينمائي";const resolvedUrl=(targetStream&&(targetStream.url||targetStream.directUrl))||(existingItem&&existingItem.url)||"";const resolvedDirectUrl=(targetStream&&(targetStream.directUrl||targetStream.url))||(existingItem&&existingItem.directUrl)||"";const newItem={...(existingItem||{}),id:(existingItem&&existingItem.id)||`pl-${Date.now()}-${Math.random().toString(36).substr(2,6)}`,movieId:(t&&t.id)||(existingItem&&existingItem.movieId),movieTitle:resolvedT,title:resolvedT,posterUrl:y||(t&&t.posterUrl)||(existingItem&&existingItem.posterUrl)||"",originalUrl:h||(existingItem&&existingItem.originalUrl)||"",url:resolvedUrl,directUrl:resolvedDirectUrl,streamUrl:resolvedUrl,category:(t&&t.category)||(existingItem&&existingItem.category)||"سينما",selectedStream:targetStream?{...targetStream,preferredMode:mode}:(existingItem?existingItem.selectedStream:null),preferredMode:mode,selectedServer:(targetStream&&targetStream.server)||(existingItem&&existingItem.selectedServer)||"سيرفر",selectedQuality:(targetStream&&targetStream.quality)||(existingItem&&existingItem.selectedQuality)||"HD",selectedType:(targetStream&&targetStream.type)||(existingItem&&existingItem.selectedType)||"stream",allStreams:(L&&L.length>0)?sortStreamsAscending(L):(existingItem&&existingItem.allStreams?sortStreamsAscending(existingItem.allStreams):(targetStream?[targetStream]:[])),wasAutoRepaired:!0,repairedQuality:(targetStream&&targetStream.quality)||(existingItem&&existingItem.repairedQuality)||"HD",repairedAt:new Date().toISOString(),addedAt:(existingItem&&existingItem.addedAt)||new Date().toISOString(),updatedAt:new Date().toISOString(),duration:(t&&t.duration)||(existingItem&&existingItem.duration)};const mTitle=((newItem.movieTitle||"").trim()).toLowerCase();const mId=newItem.movieId;const nTargetUrl=newItem.originalUrl?normalizeVideoKey(newItem.originalUrl):"";const duplicateIndices=[];(d||[]).forEach((it,idx)=>{if(!it)return;if((mId&&it.movieId&&it.movieId===mId)||(nTargetUrl&&it.originalUrl&&normalizeVideoKey(it.originalUrl)===nTargetUrl)||(mTitle&&it.movieTitle&&it.movieTitle.trim().toLowerCase()===mTitle)||(mTitle&&it.title&&it.title.trim().toLowerCase()===mTitle)){duplicateIndices.push(idx);}});let nextPlaylist;let replacedTargetIdx=0;if(duplicateIndices.length>0){const primaryIdx=existingIdx!==-1&&duplicateIndices.includes(existingIdx)?existingIdx:duplicateIndices[0];replacedTargetIdx=primaryIdx;const dupSet=new Set(duplicateIndices.filter(idx=>idx!==primaryIdx));nextPlaylist=d.filter((_,idx)=>!dupSet.has(idx)).map((it,idx)=>(idx===primaryIdx?newItem:it));}else if(existingIdx!==-1&&existingIdx<d.length){replacedTargetIdx=existingIdx;nextPlaylist=[...d];nextPlaylist[existingIdx]=newItem;}else{replacedTargetIdx=d.length;nextPlaylist=[...d,newItem];}if(typeof onUpdatePlaylist==="function"){onUpdatePlaylist(nextPlaylist);}else{ha(nextPlaylist);}try{const rawPls=localStorage.getItem("autocinema_cinema_playlists");const activePlId=localStorage.getItem("autocinema_active_playlist_id")||"playlist-default";let allPls=rawPls?JSON.parse(rawPls):[];if(!Array.isArray(allPls)||allPls.length===0){allPls=[{id:activePlId,name:"قائمة التشغيل الرئيسية",items:nextPlaylist,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}];}else{const pIdx=allPls.findIndex((p)=>p.id===activePlId);if(pIdx!==-1){allPls[pIdx]={...allPls[pIdx],items:nextPlaylist,updatedAt:new Date().toISOString()};}else{allPls[0]={...allPls[0],items:nextPlaylist,updatedAt:new Date().toISOString()};}}localStorage.setItem("autocinema_cinema_playlists",JSON.stringify(allPls));localStorage.setItem("autocinema_cinema_playlist",JSON.stringify(nextPlaylist));saveAllCinemaPlaylistsToDb(allPls,activePlId).catch((err)=>console.warn(err));}catch(_){}saveCinemaPlaylistToDb(nextPlaylist,replacedTargetIdx).catch((err)=>console.warn(err));try{window.dispatchEvent(new CustomEvent("autocinema:cinema-playlists-updated"));}catch(_){}if(targetStream&&(h||newItem.originalUrl)){saveStreamPreference(h||newItem.originalUrl,targetStream,mode);saveStreamPreferenceToDb(newItem.originalUrl||newItem.url,newItem.selectedStream,mode).catch(()=>{});}M(prev=>{const next=new Set(prev);if(targetStream){next.add(targetStream.url);if(targetStream.id)next.add(targetStream.id);if(targetStream.directUrl)next.add(targetStream.directUrl);}if(L&&L.length>0){L.forEach(st=>{if(!st)return;if(st.url)next.add(st.url);if(st.id)next.add(st.id);if(st.directUrl)next.add(st.directUrl);});}return next;});ae(`✓ تم استبدال الفيلم في قائمة التشغيل مباشرة بالرابط المختار (${newItem.selectedServer} - ${newItem.selectedQuality})! 🔄`);setTimeout(()=>{ae(null)},4000);setDupWarning(null);try{(window as any).__autocinema_pending_replaced_stream={index:replacedTargetIdx,movie:newItem,stream:targetStream,mode:mode};e();if(typeof u==="function"){u(replacedTargetIdx);}window.dispatchEvent(new CustomEvent("autocinema:play-replaced-stream",{detail:{index:replacedTargetIdx,movie:newItem,stream:targetStream,mode:mode}}));}catch(navErr){console.warn("[Auto-navigate to Cinema Screen Error]",navErr);}},_e=(O)=>{const isYtStream=!!(O&&(O.isYouTube||O.youtubeId||(O.url&&(O.url.includes("youtube")||O.url.includes("youtu.be")))||(O.directUrl&&(O.directUrl.includes("youtube")||O.directUrl.includes("youtu.be")))));const modeToSave=isYtStream?"embed":B;const existingIdx=findDuplicateIndex(O);if(existingIdx!==-1){setDupWarning({type:"single",stream:O,title:g||(t==null?void 0:t.title)||"هذا الفيلم",existingIndex:existingIdx,existingItem:d[existingIdx]});return;}const D=ye(O);r(D);saveStreamPreference(h,O,modeToSave);M(J=>{const re=new Set(J);re.add(O.url);if(O.id)re.add(O.id);if(O.directUrl)re.add(O.directUrl);return re;});ae(`تمت إضافة (${O.server} - ${O.quality}) إلى قائمة التشغيل بنجاح! 🎬`);setTimeout(()=>{ae(null)},3500);},I=()=>{const existingIdx=findDuplicateIndex(L&&L.length>0?L[0]:null);if(d.length>0&&existingIdx!==-1){setDupWarning({type:"all",count:L.length,title:g||(t==null?void 0:t.title)||"هذا الفيلم",existingIndex:existingIdx,existingItem:d[existingIdx]});return;}L.forEach(D=>{if(!D)return;if(!j.has(D.url)&&!j.has(D.id)){const J=ye(D);r(J);}});const O=new Set(j);L.forEach(D=>{if(!D)return;if(D.url)O.add(D.url);if(D.id)O.add(D.id);if(D.directUrl)O.add(D.directUrl);});M(O);ae(`تمت إضافة جميع السيرفرات (${L.length}) إلى قائمة التشغيل بنجاح! 🎬`);setTimeout(()=>{ae(null)},3500);},ie=(O)=>{const isYtStream=!!(O&&(O.isYouTube||O.youtubeId||(O.url&&(O.url.includes("youtube")||O.url.includes("youtu.be")))||(O.directUrl&&(O.directUrl.includes("youtube")||O.directUrl.includes("youtu.be")))||(h&&(h.includes("youtube")||h.includes("youtu.be")))));const pref=getStreamPreference(h);const mode=isYtStream?"embed":((pref&&pref.playbackMode)?pref.playbackMode:(O.type==="embed"?"embed":"direct"));K(O);H(mode);he(null);saveStreamPreference(h,O,mode);};return l?c.jsxs("div",{onClick:e,className:"fixed inset-0 z-[80] flex items-center justify-center p-2.5 sm:p-5 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200 dir-rtl text-right",children:[c.jsx("div",{onClick:O=>O.stopPropagation(),className:"w-[95vw] max-w-[95vw] h-[95vh] max-h-[95vh] flex flex-col bg-slate-900 border-2 border-indigo-500/40 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200",children:F?(()=>{const O=j.has(F.url)||j.has(F.id)||(F.directUrl?j.has(F.directUrl):!1);return c.jsxs("div",{className:"flex flex-col flex-1 overflow-hidden",children:[c.jsxs("div",{className:"flex items-center justify-between p-2 sm:p-2.5 bg-gradient-to-r from-slate-900 via-indigo-950/80 to-slate-900 border-b border-indigo-500/30 gap-2 overflow-x-auto custom-scrollbar flex-nowrap flex-shrink-0",children:[c.jsxs("div",{className:"flex items-center gap-1.5 sm:gap-2 min-w-0 shrink",children:[c.jsx("div",{className:"p-1.5 rounded-lg bg-sky-600/30 text-sky-300 border border-sky-400/30 shadow-inner shrink-0",children:c.jsx(Xn,{className:"w-4 h-4 animate-pulse"})}),c.jsx("span",{className:"px-1.5 py-0.5 rounded-md bg-sky-600 text-white text-[10px] font-black shrink-0",children:"معاينة"}),c.jsx("h3",{className:"text-xs sm:text-sm font-black text-white truncate max-w-[120px] sm:max-w-xs md:max-w-md",title:g||"فيلم بدون عنوان",children:g||"فيلم بدون عنوان"}),c.jsxs("span",{className:"text-[11px] text-amber-300 font-bold shrink-0 hidden md:inline",children:["(",F.server," - ",F.quality,")"]})]}),L.length>1&&(()=>{const curIdx=L.findIndex(s=>s===F||(s.url&&s.url===F.url)||(s.id&&s.id===F.id)),safeIdx=curIdx!==-1?curIdx:0,nextIdx=(safeIdx+1)%L.length,prevIdx=(safeIdx-1+L.length)%L.length,nextS=L[nextIdx],prevS=L[prevIdx];return c.jsxs("div",{className:"flex items-center gap-1 bg-slate-950/90 border border-amber-500/50 rounded-xl p-0.5 shrink-0 shadow-md",title:"الانتقال السريع بين الجودات دون الحاجة لتمرير السكرول",children:[c.jsx("button",{type:"button",onClick:()=>ie(prevS),className:"p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white transition-all cursor-pointer active:scale-95",title:`الجودة السابقة: ${prevS.quality} (${prevS.server})`,children:c.jsx(vl,{className:"w-3.5 h-3.5"})}),c.jsxs("button",{type:"button",onClick:()=>ie(nextS),className:"flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:`اضغط للانتقال للجودة التالية: ${nextS.quality} (${nextS.server}) دون سكرول`,children:[c.jsx(t1,{className:"w-3.5 h-3.5 stroke-[2.5]"}),c.jsxs("span",{children:["الجودة: ",F.quality]}),c.jsxs("span",{className:"text-[10px] bg-slate-950/30 text-slate-950 px-1 py-0.2 rounded font-mono font-bold",children:[safeIdx+1,"/",L.length]}),c.jsx(Lo,{className:"w-3 h-3 text-slate-950 stroke-[2.5]"})]}),c.jsx("button",{type:"button",onClick:()=>ie(nextS),className:"p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white transition-all cursor-pointer active:scale-95",title:`الجودة التالية: ${nextS.quality} (${nextS.server})`,children:c.jsx(Qs,{className:"w-3.5 h-3.5"})}),c.jsxs("div",{className:"relative flex items-center shrink-0",children:[c.jsx("select",{value:safeIdx,onChange:ev=>{const target=L[Number(ev.target.value)];target&&ie(target)},className:"appearance-none bg-slate-900 hover:bg-slate-850 text-amber-300 font-bold text-xs pl-6 pr-2 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-amber-400 cursor-pointer shadow-inner",title:"اختر الجودة المطلوبة مباشرة دون سكرول",children:L.map((s,idx)=>c.jsxs("option",{value:idx,className:"bg-slate-900 text-white font-bold",children:[`${s.quality} - ${s.server}`]},`${s.id || "opt"}-${idx}`))}),c.jsx(Or,{className:"w-3 h-3 text-amber-400 absolute left-1.5 pointer-events-none"})]})]});})(),c.jsxs("div",{className:"flex items-center gap-1.5 shrink-0 flex-nowrap",children:[h&&c.jsxs("a",{href:h,target:"_blank",rel:"noopener noreferrer",className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 text-slate-950 font-black text-xs shadow-md transition-all active:scale-95 cursor-pointer whitespace-nowrap border border-amber-300",title:"عرض رابط الفيلم الأصلي في صفحة خارجية جديدة",children:[c.jsx(Qv,{className:"w-3.5 h-3.5"}),c.jsx("span",{className:"hidden sm:inline",children:"عرض الفيلم في صفحة خارجية ↗"})]}),c.jsxs("button",{type:"button",onClick:e,className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-200 hover:text-rose-200 border border-slate-700 hover:border-rose-500/40 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:"العودة لمكتبة الأفلام",children:[c.jsx(qs,{className:"w-3.5 h-3.5 text-rose-400"}),c.jsx("span",{className:"hidden sm:inline",children:"المكتبة"})]}),c.jsxs("button",{type:"button",onClick:()=>K(null),className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 hover:text-white border border-indigo-500/40 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:"العودة لقائمة السيرفرات والجودات المستخرجة",children:[c.jsx(Po,{className:"w-3.5 h-3.5 text-indigo-400"}),c.jsx("span",{className:"hidden sm:inline",children:"الجودات"})]}),c.jsx("button",{type:"button",onClick:()=>_e(F),className:`flex items-center gap-1 px-2.5 py-1 rounded-lg font-black text-xs border transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap ${O?"bg-emerald-600/30 text-emerald-300 border-emerald-500/50 hover:bg-emerald-600/40":"bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400/50"}`,title:"إضافة هذا السيرفر والجودة إلى قائمة التشغيل (Playlist)",children:O?c.jsxs(c.Fragment,{children:[c.jsx(os,{className:"w-3.5 h-3.5 text-emerald-400 stroke-[3]"}),c.jsx("span",{children:"مضاف"})]}):c.jsxs(c.Fragment,{children:[c.jsx(mi,{className:"w-3.5 h-3.5 stroke-[3]"}),c.jsx("span",{children:"إضافة للـ Playlist"})]})}),findDuplicateIndex(F)!==-1&&c.jsxs("button",{type:"button",onClick:()=>handleReplaceInPlaylist({type:"single",stream:F,title:g,existingIndex:findDuplicateIndex(F),existingItem:d[findDuplicateIndex(F)]}),className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-black text-xs border border-teal-400/50 shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap",title:"استبدال الرابط المختار فوراً في قائمة التشغيل مباشرة",children:[c.jsx(Fr,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:"استبدال بالـ Playlist 🔄"})]}),c.jsxs("button",{type:"button",onClick:()=>{e(),u()},className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-600/40 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-400/40 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:"الانتقال إلى شاشة العرض وقائمة التشغيل",children:[c.jsx(Ci,{className:"w-3.5 h-3.5 text-amber-300"}),c.jsxs("span",{children:["الـ Playlist (",d.length,")"]})]}),c.jsx("button",{type:"button",onClick:e,className:"p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer shrink-0",title:"إغلاق",children:c.jsx(cs,{className:"w-4 h-4"})})]})]}),de&&c.jsxs("div",{className:"bg-emerald-600 text-white text-xs sm:text-sm font-black px-4 py-2 flex items-center justify-between animate-in fade-in duration-150",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx(os,{className:"w-4 h-4 stroke-[3]"}),c.jsx("span",{children:de})]}),c.jsx("button",{type:"button",onClick:()=>ae(null),className:"p-0.5 hover:bg-emerald-700 rounded cursor-pointer",children:c.jsx(cs,{className:"w-3.5 h-3.5"})})]}),c.jsx("div",{className:"flex-1 overflow-y-auto p-3 sm:p-4 custom-scrollbar bg-slate-950/70 flex flex-col items-center justify-center min-h-[220px]",children:c.jsxs("div",{className:"relative w-full aspect-video max-h-[66vh] sm:max-h-[72vh] rounded-xl overflow-hidden bg-black border-2 border-indigo-500/30 shadow-2xl flex items-center justify-center",children:[(()=>{const isYtPreview=!!(F&&(F.isYouTube||F.youtubeId||(F.url&&(F.url.includes("youtube")||F.url.includes("youtu.be")))||(F.directUrl&&(F.directUrl.includes("youtube")||F.directUrl.includes("youtu.be")))||(h&&(h.includes("youtube")||h.includes("youtu.be")))));if(B==="direct"&&F.type!=="embed"&&!isYtPreview){return c.jsx("video",{ref:P,controls:!0,playsInline:!0,crossOrigin:"anonymous",className:"w-full h-full object-contain bg-black",children:F.subtitles&&F.subtitles[0]&&c.jsx("track",{kind:"subtitles",src:F.subtitles[0].file.startsWith("/api/")?F.subtitles[0].file:`/api/stream-proxy?url=${encodeURIComponent(F.subtitles[0].file)}`,srcLang:"ar",label:"عربي",default:!0})});}const embedSrc=isYtPreview?(F.url.includes("/embed/")?F.url:(F.directUrl&&F.directUrl.includes("/embed/")?F.directUrl:F.url)):((F.type==="hls"||F.type==="mp4"||F.url.startsWith("/api/stream-proxy")||F.url.includes(".m3u8")||F.url.includes("/hls/"))?`/api/player-embed?url=${encodeURIComponent(F.url)}&title=${encodeURIComponent(g||F.server)}${F.subtitles&&F.subtitles[0]?`&sub=${encodeURIComponent(F.subtitles[0].file)}`:""}`:F.url);return c.jsx("iframe",{src:embedSrc,className:"w-full h-full border-0 bg-black",sandbox:isYtPreview?void 0:"allow-scripts allow-same-origin allow-forms allow-presentation allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation",allowFullScreen:!0,referrerPolicy:isYtPreview?"strict-origin-when-cross-origin":"no-referrer-when-downgrade",allow:"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen",title:`Preview ${F.server}`});})(),L.length>1&&(()=>{const curIdx=L.findIndex(s=>s===F||(s.url&&s.url===F.url)||(s.id&&s.id===F.id)),safeIdx=curIdx!==-1?curIdx:0,nextIdx=(safeIdx+1)%L.length,nextS=L[nextIdx];return c.jsx("div",{className:"absolute top-3 left-3 z-30 pointer-events-auto",children:c.jsxs("button",{type:"button",onClick:()=>ie(nextS),className:"flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950/85 hover:bg-slate-900 text-amber-300 hover:text-amber-200 border border-amber-500/60 hover:border-amber-400 backdrop-blur-md font-black text-xs shadow-2xl transition-all cursor-pointer active:scale-95",title:`الانتقال للجودة التالية: ${nextS.quality} (${nextS.server}) دون الحاجة لتمرير السكرول`,children:[c.jsx(t1,{className:"w-3.5 h-3.5 text-amber-400"}),c.jsxs("span",{children:["الجودة: ",F.quality]}),c.jsxs("span",{className:"px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono",children:[safeIdx+1,"/",L.length]}),c.jsx("span",{className:"text-[10px] font-bold text-amber-400",children:"⇄ التالي"})]})});})(),W&&c.jsxs("div",{className:"absolute top-3 inset-x-3 p-2.5 rounded-lg bg-red-950/90 border border-red-500/50 text-red-200 text-xs flex items-center justify-between gap-2 shadow-lg backdrop-blur-sm",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx(Uo,{className:"w-4 h-4 text-red-400 flex-shrink-0"}),c.jsx("span",{children:W})]}),B!=="embed"&&c.jsx("button",{type:"button",onClick:()=>H("embed"),className:"px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black cursor-pointer",children:"تجربة مشغل السيرفر Embed"}),c.jsxs("button",{type:"button",onClick:()=>{const popUrl=F.directUrl||F.url;if(popUrl){const w=window.open(popUrl,"_blank","noopener,noreferrer");if(w){try{w.blur();window.focus();}catch(_){}}}},className:"px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-black cursor-pointer flex items-center gap-1",children:[c.jsx(Qv,{className:"w-3 h-3"}),c.jsx("span",{children:"نافذة مستقلة"})]})]})]})}),c.jsxs("div",{className:"p-2 sm:p-3 bg-slate-950 border-t border-slate-800 space-y-2 flex-shrink-0 z-10",children:[c.jsxs("div",{className:"flex items-center gap-1.5 sm:gap-2 overflow-x-auto custom-scrollbar flex-nowrap text-xs pb-1",children:[c.jsxs("div",{className:"flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 text-white font-black shrink-0 shadow-sm whitespace-nowrap",children:[c.jsx(Ci,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:F.server})]}),c.jsx("div",{className:`px-2 py-1 rounded-lg text-xs font-black border shrink-0 font-mono whitespace-nowrap ${F.quality.includes("1080")||F.quality.includes("4K")?"bg-purple-950/90 text-purple-300 border-purple-500/50":F.quality.includes("720")?"bg-sky-950/90 text-sky-300 border-sky-500/50":"bg-slate-800 text-amber-300 border-slate-700"}`,children:F.quality}),L.length>1&&(()=>{const curIdx=L.findIndex(s=>s===F||(s.url&&s.url===F.url)||(s.id&&s.id===F.id)),safeIdx=curIdx!==-1?curIdx:0,nextIdx=(safeIdx+1)%L.length,nextS=L[nextIdx];return c.jsxs("button",{type:"button",onClick:()=>ie(nextS),className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition-all cursor-pointer active:scale-95 shrink-0 shadow-sm whitespace-nowrap",title:`الانتقال السريع للجودة التالية: ${nextS.quality} (${nextS.server}) دون سكرول`,children:[c.jsx(Lo,{className:"w-3 h-3 stroke-[2.5]"}),c.jsxs("span",{children:["الجودة التالية (",nextS.quality,")"]})]});})(),c.jsxs("div",{className:"flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-800 shrink-0",children:[c.jsx("button",{type:"button",onClick:()=>{const isYtP=!!(F&&(F.isYouTube||F.youtubeId||(F.url&&(F.url.includes("youtube")||F.url.includes("youtu.be")))||(F.directUrl&&(F.directUrl.includes("youtube")||F.directUrl.includes("youtu.be")))||(h&&(h.includes("youtube")||h.includes("youtu.be")))));if(isYtP){he("فيديوهات اليوتيوب تعمل تلقائياً عبر مشغل التضمين الذكي 🎬");return;}H("direct");if(F)saveStreamPreference(h,F,"direct");},className:`px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${B==="direct"?"bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400":"text-slate-400 hover:text-white"}`,title:"مشغل الفيديو المباشر HLS/MP4",children:"مباشر"}),c.jsx("button",{type:"button",onClick:()=>{H("embed");if(F)saveStreamPreference(h,F,"embed");},className:`px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${B==="embed"?"bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400":"text-slate-400 hover:text-white"}`,title:"مشغل سيرفر المصدر Embed",children:"Embed"}),c.jsxs("button",{type:"button",onClick:()=>{const popUrl=F.directUrl||F.url;if(popUrl){const w=window.open(popUrl,"_blank","noopener,noreferrer");if(w){try{w.blur();window.focus();}catch(_){}}}},className:"px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap text-amber-300 hover:text-white bg-amber-950/60 hover:bg-amber-800 border border-amber-600/40 flex items-center gap-1",title:"فتح في نافذة مستقلة لتجاوز قيود التضمين",children:[c.jsx(Qv,{className:"w-3 h-3 text-amber-300"}),c.jsx("span",{children:"نافذة مستقلة"})]})]}),c.jsxs("div",{className:"flex-1 min-w-[200px] sm:min-w-[260px] flex items-center justify-between gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-700/80 text-slate-300 shrink-0 sm:shrink",children:[c.jsx("span",{className:"text-[10px] font-black text-amber-400 shrink-0 font-sans",children:"الرابط:"}),c.jsx("span",{className:"flex-1 truncate select-all font-mono text-[11px] text-slate-200 min-w-0",title:F.directUrl||F.url,children:F.directUrl||F.url}),c.jsx("button",{type:"button",onClick:()=>ve(F.directUrl||F.url,F.id),className:"flex items-center gap-1 text-[11px] font-sans font-bold bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white px-2 py-0.5 rounded border border-slate-700 transition-all cursor-pointer shrink-0 active:scale-95",title:"نسخ رابط البث المستخرج",children:_===F.id?c.jsxs(c.Fragment,{children:[c.jsx(os,{className:"w-3 h-3 text-emerald-400"}),c.jsx("span",{className:"text-emerald-300",children:"تم"})]}):c.jsxs(c.Fragment,{children:[c.jsx(Bo,{className:"w-3 h-3"}),c.jsx("span",{children:"نسخ"})]})})]})]}),L.length>0&&c.jsxs("div",{className:"pt-1.5 border-t border-slate-800/80",children:[c.jsxs("div",{className:"flex items-center gap-1.5 mb-1",children:[c.jsx(t1,{className:"w-3.5 h-3.5 text-amber-400"}),c.jsx("span",{className:"text-xs font-black text-white",children:"الجودات والسيرفرات المستخرجة:"}),c.jsxs("span",{className:"px-1.5 py-0.2 rounded-full bg-indigo-600/40 text-indigo-300 text-[10px] font-bold",children:[L.length," متاح"]})]}),c.jsx("div",{className:"flex items-center gap-1.5 overflow-x-auto custom-scrollbar flex-nowrap py-1",children:L.map((D,J)=>{const re=F&&(D.url===F.url||(D.id&&F.id&&D.id===F.id)),Ae=j.has(D.url)||j.has(D.id)||D.directUrl&&j.has(D.directUrl);return c.jsxs("button",{type:"button",onClick:()=>ie(D),className:`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 shrink-0 whitespace-nowrap ${re?"bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-400 shadow-md ring-2 ring-indigo-400/60 font-black scale-[1.02]":"bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-slate-600"}`,title:`معاينة سيرفر ${D.server} بجودة ${D.quality}`,children:[c.jsx("span",{children:D.server}),c.jsx("span",{className:`px-1.5 py-0.2 rounded text-[10px] font-mono font-black ${re?"bg-amber-400 text-slate-950":"bg-slate-800 text-amber-300 border border-slate-700"}`,children:D.quality}),re&&c.jsx(os,{className:"w-3.5 h-3.5 text-white stroke-[3]"}),Ae&&!re&&c.jsx("span",{className:"text-[10px] text-emerald-400",title:"مضاف بالـ Playlist",children:"✔"})]},`${D.id || "stream"}-${J}`)})})]})]})]})})():c.jsxs("div",{className:"flex flex-col flex-1 overflow-hidden",children:[c.jsxs("div",{className:"flex items-center justify-between p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-b border-indigo-500/30",children:[c.jsxs("div",{className:"flex items-center gap-3",children:[c.jsx("div",{className:"p-2.5 rounded-xl bg-indigo-600/30 text-indigo-300 border border-indigo-400/30 shadow-inner",children:c.jsx(Io,{className:"w-6 h-6 animate-pulse"})}),c.jsxs("div",{children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx("h3",{className:"text-lg sm:text-xl font-black text-white",children:"استخراج سيرفرات وبث الفيديو"}),c.jsx("span",{className:"px-2 py-0.5 rounded-full bg-indigo-600 text-[11px] font-black text-amber-300 border border-indigo-400/40",children:"شاشة العرض 🎬"})]}),c.jsx("p",{className:"text-xs text-slate-300 mt-0.5",children:"فحص صفحة الفيلم، استخراج السيرفرات والجودات المختلفة ومعاينتها واختيارها لـ Playlist شاشة العرض"})]})]}),c.jsxs("div",{className:"flex items-center gap-2",children:[h&&c.jsxs("a",{href:h,target:"_blank",rel:"noopener noreferrer",className:"flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 text-slate-950 font-black text-xs shadow-md transition-all active:scale-95 cursor-pointer whitespace-nowrap border border-amber-300",title:"عرض رابط الفيلم الأصلي في صفحة خارجية جديدة",children:[c.jsx(Qv,{className:"w-4 h-4"}),c.jsx("span",{children:"عرض الفيلم في صفحة خارجية ↗"})]}),c.jsxs("button",{type:"button",onClick:e,className:"flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95",title:"العودة للمكتبة",children:[c.jsx(qs,{className:"w-4 h-4 text-rose-400"}),c.jsx("span",{children:"العودة للمكتبة"})]}),c.jsx("button",{type:"button",onClick:e,className:"p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors cursor-pointer",title:"إغلاق",children:c.jsx(cs,{className:"w-5 h-5"})})]})]}),de&&c.jsxs("div",{className:"bg-emerald-600 text-white text-xs sm:text-sm font-black px-4 py-2 flex items-center justify-between animate-in fade-in duration-150",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx(os,{className:"w-4 h-4 stroke-[3]"}),c.jsx("span",{children:de})]}),c.jsx("button",{type:"button",onClick:()=>ae(null),className:"p-0.5 hover:bg-emerald-700 rounded cursor-pointer",children:c.jsx(cs,{className:"w-3.5 h-3.5"})})]}),c.jsxs("div",{className:"p-4 bg-slate-950/50 border-b border-slate-800",children:[c.jsxs("div",{className:"flex flex-col sm:flex-row gap-2",children:[c.jsx("div",{className:"relative flex-1",children:c.jsx("input",{type:"text",value:h,onChange:O=>m(O.target.value),onKeyDown:O=>{O.key==="Enter"&&fe(h)},placeholder:"أدخل أو الصق رابط صفحة الفيلم أو فيديو يوتيوب (مثلاً: https://youtube.com/watch?v=... أو aflam18.media/...)",className:"w-full px-3.5 py-2.5 text-xs sm:text-sm bg-slate-900 text-slate-100 rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400 font-mono"})}),c.jsxs("button",{type:"button",onClick:()=>fe(h),disabled:S||!h.trim(),className:"px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 whitespace-nowrap",children:[S?c.jsx(Fr,{className:"w-4 h-4 animate-spin"}):c.jsx($i,{className:"w-4 h-4"}),c.jsx("span",{children:S?"جاري الفحص...":"فحص واستخراج السيرفرات"})]})]}),c.jsxs("div",{className:"mt-2.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs font-bold text-slate-300",children:[c.jsxs("div",{className:"flex items-center gap-1.5 shrink-0 text-amber-300",children:[c.jsx(qs,{className:"w-4 h-4 text-amber-400 flex-shrink-0"}),c.jsx("span",{children:"اسم الفيلم في شاشة العرض:"})]}),c.jsx("input",{type:"text",value:g,onChange:O=>p(O.target.value),placeholder:"اكتب اسم الفيلم أو دعه يُكتشف تلقائياً...",className:"flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 focus:border-amber-400 rounded-lg text-white font-bold text-xs focus:outline-none"})]})]}),c.jsxs("div",{className:"flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 custom-scrollbar",children:[S&&c.jsxs("div",{className:"py-12 flex flex-col items-center justify-center text-center space-y-3",children:[c.jsxs("div",{className:"relative",children:[c.jsx("div",{className:"w-14 h-14 rounded-full border-4 border-indigo-500/20 border-t-indigo-500 animate-spin"}),c.jsx(Io,{className:"w-6 h-6 text-indigo-400 absolute inset-0 m-auto animate-pulse"})]}),c.jsxs("div",{className:"space-y-1",children:[c.jsx("p",{className:"text-sm font-black text-white",children:"جاري الاتصال بصفحة الفيلم أو اليوتيوب وفحص السيرفرات والجودات..."}),c.jsx("p",{className:"text-xs text-slate-400",children:"استخراج جودات وروابط البث (YouTube, HLS, MP4, Iframe Embed)"})]})]}),T&&!S&&c.jsxs("div",{className:"p-4 rounded-xl bg-red-950/40 border border-red-500/40 flex items-start gap-3 text-red-200 text-xs sm:text-sm",children:[c.jsx(Uo,{className:"w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"}),c.jsxs("div",{className:"space-y-1",children:[c.jsx("p",{className:"font-black text-red-300",children:T}),c.jsx("p",{className:"text-slate-400 text-xs",children:"تأكد من أن الرابط مباشر لصفحة الفيلم أو فيديو يوتيوب يحتوي على مشغل فيديو."})]})]}),!S&&L.length>0&&c.jsxs("div",{className:"space-y-3",children:[c.jsxs("div",{className:"flex items-center justify-between pb-2 border-b border-slate-800",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsxs("span",{className:"text-sm font-black text-white",children:["تم اكتشاف ",L.length," سيرفر/بث متاح:"]}),c.jsx("span",{className:"px-2 py-0.5 bg-emerald-950 text-emerald-300 border border-emerald-500/40 rounded-full text-xs font-black",children:"جاهز للمعاينة والإضافة"})]}),c.jsxs("button",{type:"button",onClick:I,className:"flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-400/40 text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95",children:[c.jsx(mi,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:"إضافة الكل إلى Playlist"})]})]}),c.jsx("div",{className:"grid grid-cols-1 gap-2.5",children:L.map((O,D)=>{const J=j.has(O.url)||j.has(O.id)||O.directUrl&&j.has(O.directUrl),re=_===O.id;return c.jsx("div",{className:`p-3.5 rounded-xl border transition-all ${J?"bg-emerald-950/30 border-emerald-500/40":"bg-slate-850/80 hover:bg-slate-800 border-slate-700/80 hover:border-indigo-500/40"}`,children:c.jsxs("div",{className:"flex flex-col sm:flex-row sm:items-center justify-between gap-3",children:[c.jsxs("div",{className:"space-y-1.5 min-w-0",children:[c.jsxs("div",{className:"flex items-center flex-wrap gap-2",children:[c.jsxs("span",{className:"px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white font-black text-xs sm:text-sm shadow-sm flex items-center gap-1.5",children:[c.jsx(Ci,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:O.server})]}),c.jsx("span",{className:`px-2 py-0.5 rounded-md text-[11px] font-black border ${O.quality.includes("1080")||O.quality.includes("4K")?"bg-purple-950/80 text-purple-300 border-purple-500/40":O.quality.includes("720")?"bg-sky-950/80 text-sky-300 border-sky-500/40":"bg-slate-800 text-amber-300 border-slate-700"}`,children:O.quality}),c.jsx("span",{className:"px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-300 text-[10px] font-bold border border-slate-700 font-mono",children:O.type==="hls"?"⚡ HLS M3U8 مباشر":O.type==="mp4"?"🎬 MP4 مباشر":"🌐 مشغل سيرفر Embed"})]}),c.jsxs("div",{className:"flex items-center gap-2 text-xs font-mono text-slate-400 truncate",children:[c.jsx("span",{className:"truncate max-w-[280px] sm:max-w-md",children:O.directUrl||O.url}),c.jsx("button",{type:"button",onClick:()=>ve(O.directUrl||O.url,O.id),className:"text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 flex-shrink-0 cursor-pointer",title:"نسخ الرابط",children:re?c.jsx(os,{className:"w-3.5 h-3.5 text-emerald-400"}):c.jsx(Bo,{className:"w-3.5 h-3.5"})})]})]}),c.jsxs("div",{className:"flex items-center gap-2 flex-shrink-0",children:[c.jsxs("button",{type:"button",onClick:()=>ie(O),className:"flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-black text-xs sm:text-sm shadow-md transition-all cursor-pointer active:scale-95 whitespace-nowrap border border-sky-400/30",title:"معاينة هذا البث والجودة في شاشة المعاينة",children:[c.jsx(Xn,{className:"w-4 h-4 text-sky-200"}),c.jsx("span",{children:"معاينة البث"})]}),c.jsx("button",{type:"button",onClick:()=>_e(O),className:`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-black text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 whitespace-nowrap ${J?"bg-emerald-600/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-600/30":"bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-400/50 shadow-md"}`,title:J?"موجود بالفعل في الـ Playlist":"إضافة هذا السيرفر إلى قائمة شاشة العرض",children:J?c.jsxs(c.Fragment,{children:[c.jsx(os,{className:"w-4 h-4 text-emerald-400 stroke-[3]"}),c.jsx("span",{children:"مضاف بالـ Playlist"})]}):c.jsxs(c.Fragment,{children:[c.jsx(mi,{className:"w-4 h-4 stroke-[2.5]"}),c.jsx("span",{children:"إضافة للـ Playlist"})]})}),findDuplicateIndex(O)!==-1&&c.jsxs("button",{type:"button",onClick:()=>handleReplaceInPlaylist({type:"single",stream:O,title:g,existingIndex:findDuplicateIndex(O),existingItem:d[findDuplicateIndex(O)]}),className:"flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs sm:text-sm border border-teal-400/50 shadow-md transition-all cursor-pointer active:scale-95 whitespace-nowrap",title:"استبدال هذا السيرفر والجودة مباشرة في قائمة التشغيل",children:[c.jsx(Fr,{className:"w-3.5 h-3.5 stroke-[2.5]"}),c.jsx("span",{children:"استبدال في القائمة 🔄"})]}),]})]})},`${O.id || "card"}-${D}`)})})]}),!S&&L.length===0&&!T&&c.jsxs("div",{className:"py-8 text-center text-slate-400 space-y-2",children:[c.jsx(Io,{className:"w-10 h-10 text-slate-600 mx-auto"}),c.jsx("p",{className:"text-sm font-bold",children:'أدخل رابط أي فيلم أو فيديو يوتيوب واضغط على "فحص واستخراج السيرفرات" للبدء.'}),c.jsx("p",{className:"text-xs text-slate-500",children:"يدعم روابط يوتيوب (YouTube / Shorts) ومواقع aflam18.media و aflamicose.com وسيرفرات Uqload و Filemoon و Stream وغيرها."})]})]}),c.jsxs("div",{className:"p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3",children:[c.jsxs("button",{type:"button",onClick:e,className:"flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs sm:text-sm font-bold transition-colors cursor-pointer",children:[c.jsx(qs,{className:"w-4 h-4 text-rose-400"}),c.jsx("span",{children:"العودة للمكتبة"})]}),c.jsxs("button",{type:"button",onClick:()=>{e(),u()},className:"flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs sm:text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer active:scale-95",children:[c.jsx(Ci,{className:"w-4.5 h-4.5 text-amber-300"}),c.jsxs("span",{children:["الانتقال إلى شاشة العرض (",d.length," عنصر)"]}),c.jsx(vl,{className:"w-4 h-4"})]})]})]})}),dupWarning&&c.jsx("div",{onClick:O=>O.stopPropagation(),className:"fixed inset-0 z-[95] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-150 dir-rtl",children:c.jsxs("div",{className:"w-full max-w-lg bg-slate-900 border-2 border-amber-500/80 rounded-2xl shadow-2xl p-4 sm:p-6 text-right space-y-4 animate-in zoom-in-95 duration-150",children:[c.jsxs("div",{className:"flex items-start gap-3",children:[c.jsx("div",{className:"p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex-shrink-0 mt-0.5 shadow-inner",children:c.jsx(Uo,{className:"w-6 h-6 animate-bounce"})}),c.jsxs("div",{className:"space-y-1.5 flex-1 min-w-0",children:[c.jsx("h4",{className:"text-sm sm:text-base font-black text-amber-300",children:"⚠️ تنبيه: الفيلم موجود بالفعل في قائمة تشغيل شاشة العرض!"}),c.jsxs("p",{className:"text-xs sm:text-sm text-slate-300 leading-relaxed",children:["الفيلم ",c.jsxs("span",{className:"font-black text-white underline decoration-amber-400/50 underline-offset-2",children:[',dupWarning.title,']})," موجود مسبقاً ضمن عناصر قائمة التشغيل (Playlist) لشاشة العرض."]})]})]}),c.jsxs("div",{className:"bg-slate-950/80 rounded-xl p-3 sm:p-3.5 border border-slate-800 space-y-2.5 text-xs",children:[c.jsxs("div",{className:"flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-900/90 border border-slate-700/60",children:[c.jsxs("div",{className:"flex items-center gap-2 min-w-0",children:[c.jsx("span",{className:"px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 text-[10px] font-black border border-slate-700 shrink-0",children:"الفيلم القديم في القائمة"}),c.jsx("span",{className:"text-slate-300 font-medium truncate text-[11px]",children:dupWarning.existingItem?`سيرفر: ${dupWarning.existingItem.selectedServer||(dupWarning.existingItem.selectedStream&&dupWarning.existingItem.selectedStream.server)||"افتراضي"} (${dupWarning.existingItem.selectedQuality||(dupWarning.existingItem.selectedStream&&dupWarning.existingItem.selectedStream.quality)||"HD"})`:"موجود بروابطه السابقة"})]}),dupWarning.existingItem&&dupWarning.existingItem.allStreams&&c.jsxs("span",{className:"text-[10px] font-mono text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded shrink-0",children:[dupWarning.existingItem.allStreams.length," سيرفر قديم"]})]}),c.jsxs("div",{className:"flex items-center justify-between gap-2 p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-200",children:[c.jsxs("div",{className:"flex items-center gap-2 min-w-0",children:[c.jsx("span",{className:"px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black shrink-0",children:"الروابط الجديدة المُستخرجة"}),c.jsx("span",{className:"text-emerald-300 font-bold truncate text-[11px]",children:dupWarning.stream?`سيرفر: ${dupWarning.stream.server} (${dupWarning.stream.quality})`:`جميع السيرفرات الجديدة المستخرجة (${L.length} سيرفر)`})]}),c.jsxs("span",{className:"text-[10px] font-mono text-emerald-300 bg-emerald-900/60 border border-emerald-600/40 px-2 py-0.5 rounded shrink-0",children:[L.length," سيرفر نشط ⚡"]})]}),c.jsx("p",{className:"text-[11px] text-amber-200/90 leading-tight pt-1",children:"💡 لا يُسمح بتكرار نفس الفيلم في نفس قائمة التشغيل. يمكنك استبدال النسخة القديمة بالروابط والجودات الجديدة المُستخرجة أو إلغاء الإضافة."})]}),c.jsxs("div",{className:"flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2 border-t border-slate-800",children:[c.jsx("button",{type:"button",onClick:()=>setDupWarning(null),className:"px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-bold transition-all cursor-pointer active:scale-95 text-center",children:"إلغاء الإضافة"}),c.jsxs("button",{type:"button",onClick:()=>handleReplaceInPlaylist(dupWarning),className:"flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-950/60 border border-emerald-400/50 transition-all cursor-pointer active:scale-95 text-center flex-1 sm:flex-initial",children:[c.jsx(Fr,{className:"w-4 h-4 text-emerald-100 stroke-[2.5]"}),c.jsx("span",{children:"استبدال الفيلم القديم بالروابط الجديدة 🔄"})]})]})]})})]}):null},zI = CinemaScreenModal;
+const GI=({isOpen:l,onClose:e,movie:t,initialUrl:i,onAddToPlaylist:r,onUpdatePlaylist,onPlayNow:a,currentPlaylist:d,onOpenCinemaScreen:u})=>{const[h,m]=q.useState(""),[g,p]=q.useState(""),[y,v]=q.useState(""),[S,E]=q.useState(!1),[T,C]=q.useState(null),[L,A]=q.useState([]),[_,k]=q.useState(null),[j,M]=q.useState(new Set),[F,K]=q.useState(null),[B,H]=q.useState("direct"),[W,he]=q.useState(null),[de,ae]=q.useState(null),[dupWarning,setDupWarning]=q.useState(null),[$,U]=q.useState(!1),P=q.useRef(null),Z=q.useRef(null);q.useEffect(()=>{if(l){const O=((t==null?void 0:t.url)||(t==null?void 0:t.embedUrl)||(t==null?void 0:t.originalUrl)||i||"").trim(),targetTitle=(t==null?void 0:t.title)||(t==null?void 0:t.movieTitle)||"";m(O),p(targetTitle),v((t==null?void 0:t.posterUrl)||""),C(null),A([]),K(null),he(null),ae(null),setDupWarning(null),O&&fe(O,targetTitle)}else K(null),setDupWarning(null),Z.current&&(Z.current.destroy(),Z.current=null)},[l,t,i]),q.useEffect(()=>{const O=new Set;(d||[]).forEach(D=>{if(!D)return;if(D.selectedStream){if(D.selectedStream.url)O.add(D.selectedStream.url);if(D.selectedStream.id)O.add(D.selectedStream.id);if(D.selectedStream.directUrl)O.add(D.selectedStream.directUrl);}if(D.url)O.add(D.url);if(D.directUrl)O.add(D.directUrl);if(D.originalUrl)O.add(D.originalUrl);});M(O)},[d]),q.useEffect(()=>{if(!F){Z.current&&(Z.current.destroy(),Z.current=null);return}    const O = ((F && (F.directUrl || F.url)) || "").trim();
+    const isYt = !!(
+      F.isYouTube ||
+      F.youtubeId ||
+      O.includes("youtube") ||
+      O.includes("youtu.be") ||
+      O.includes("/api/youtube-player")
+    );
+    if (isYt && B !== "embed") {
+      H("embed");
+    }
+    if (he(null), B === "embed" || F.type === "embed" || isYt) {
+      Z.current && (Z.current.destroy(), (Z.current = null));
+      return;
+    }const D=P.current;if(!D)return;if(Z.current&&(Z.current.destroy(),Z.current=null),O.includes(".m3u8")||O.includes("/hls/")||F.type==="hls")if(Cs.isSupported()){const re=new Cs({enableWorker:!0,lowLatencyMode:!0,backBufferLength:60});Z.current=re,re.loadSource(O),re.attachMedia(D),re.on(Cs.Events.MANIFEST_PARSED,()=>{D.play().catch(()=>{D.muted=!0,U(!0),D.play().catch(()=>{})})}),re.on(Cs.Events.ERROR,(Ae,be)=>{if(be.fatal)switch(console.warn("[Preview Player] HLS error:",be.type),be.type){case Cs.ErrorTypes.NETWORK_ERROR:if(O.startsWith("/api/stream-proxy")){he("تم التحويل تلقائياً لمشغل السيرفر المدمج المحمي ⚡");H("embed");}else{const ge=`/api/stream-proxy?url=${encodeURIComponent(O)}`;re.loadSource(ge),re.startLoad()}break;case Cs.ErrorTypes.MEDIA_ERROR:re.recoverMediaError();break;default:re.destroy();he("تم التحويل تلقائياً لمشغل السيرفر المدمج المحمي ⚡");H("embed");break}})}else D.canPlayType("application/vnd.apple.mpegurl")?(D.src=O,D.play().catch(()=>{D.muted=!0,U(!0),D.play().catch(()=>{})})):H("embed");else D.src=O,D.play().catch(()=>{D.muted=!0,U(!0),D.play().catch(()=>{})});return()=>{Z.current&&(Z.current.destroy(),Z.current=null)}},[F,B]);const fe=async(O,D)=>{if(!O||!O.trim()){C("يرجى إدخال رابط الفيلم أو الصفحة.");return}E(!0),C(null),A([]),K(null);let J=null;for(let attempt=0;attempt<2;attempt++){try{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),12000);J=await fetch("/api/extract-video",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:O.trim(),title:D||g}),signal:controller.signal});clearTimeout(timer);if(J&&J.ok)break;}catch(netErr){if(attempt===1)J=null;else await new Promise(r=>setTimeout(r,500));}}try{if(!J)throw new Error("تعذر الاتصال بخادم الاستخراج.");let re;try{const rawText=await J.text();re=JSON.parse(rawText);}catch(_){throw new Error("تعذر قراءة بيانات السيرفرات من هذا الرابط.");}if(!J.ok||!re.success)throw new Error(re.error||"فشل استخراج الروابط من هذا الموقع.");re.title&&!g&&p(re.title),re.poster&&!y&&v(re.poster);const sortedStreams=sortStreamsAscending(re.streams||[]);A(sortedStreams);if(sortedStreams&&sortedStreams.length>0){const pref=getStreamPreference(O);const chosen=(pref?findMatchingStream(sortedStreams,pref):null)||pickDefaultQualityStream(sortedStreams);K(chosen);const isChosenYt=!!(chosen.isYouTube||chosen.youtubeId||(chosen.url&&(chosen.url.includes("youtube")||chosen.url.includes("youtu.be")||chosen.url.includes("/api/youtube-player"))));const mode=isChosenYt?"embed":((pref&&pref.playbackMode)?pref.playbackMode:(chosen.type==="embed"?"embed":"direct"));H(mode);}else{C("لم يتم العثور على سيرفرات بث مباشرة في هذه الصفحة.");}}catch(err){console.warn("[Video Extractor Warning]:",err?.message||err);const cleanO=O.trim();const fallbackStream={id:`stream-fallback-${Date.now()}`,server:"مشغل المعاينة المباشر ⚡",quality:"1080p FHD",type:"embed",url:`/api/embed-proxy?url=${encodeURIComponent(cleanO)}`,directUrl:cleanO,preferred:!0};A([fallbackStream]);K(fallbackStream);H("embed");C((err==null?void 0:err.message)||"تم توفير مشغل احتياطي لصفحة الفيلم للمعاينة المباشرة.");}finally{E(!1)}},ve=(O,D)=>{try{navigator.clipboard.writeText(O),k(D),setTimeout(()=>k(null),2e3)}catch(J){console.error("Failed to copy",J)}},ye=O=>{const candTitle=(g||(t==null?void 0:t.title)||(t==null?void 0:t.movieTitle)||"").trim();let resolvedT=candTitle&&candTitle!=="بدون عنوان"&&candTitle!=="فيلم بدون عنوان"?candTitle:"";if(!resolvedT){try{const u=new URL(h||O.url||"");const segs=u.pathname.split("/").filter(Boolean);const last=segs[segs.length-1]||"";const dec=decodeURIComponent(last).replace(/[-_+]/g," ").replace(/\.(html|php|mp4)$/i,"").trim();if(dec&&dec.length>1)resolvedT=dec;}catch(_){}}if(!resolvedT)resolvedT="فيلم سينمائي";return {id:`pl-${Date.now()}-${Math.random().toString(36).substr(2,6)}`,movieId:t==null?void 0:t.id,movieTitle:resolvedT,title:resolvedT,posterUrl:y||(t==null?void 0:t.posterUrl)||"",originalUrl:h||O.url,category:(t==null?void 0:t.category)||"سينما",selectedStream:{...O,preferredMode:B},preferredMode:B,selectedServer:O.server,selectedQuality:O.quality,selectedType:O.type,allStreams:sortStreamsAscending(L),addedAt:new Date().toISOString(),duration:t==null?void 0:t.duration};},findDuplicateIndex=O=>{const mTitle=(g||(t==null?void 0:t.title)||"").trim().toLowerCase(),mId=t==null?void 0:t.id,targetUrl=(h||(t==null?void 0:t.url)||(t==null?void 0:t.embedUrl)||"").trim(),nTargetUrl=targetUrl?normalizeVideoKey(targetUrl):"";return (d||[]).findIndex(it=>{if(!it)return!1;if(mId&&it.movieId&&it.movieId===mId)return!0;if(nTargetUrl&&it.originalUrl&&normalizeVideoKey(it.originalUrl)===nTargetUrl)return!0;if(O&&it.selectedStream&&(it.selectedStream.url===O.url||(O.directUrl&&it.selectedStream.directUrl===O.directUrl)))return!0;if(mTitle&&it.movieTitle&&it.movieTitle.trim().toLowerCase()===mTitle)return!0;return!1})},checkDuplicate=O=>{return findDuplicateIndex(O)!==-1},handleReplaceInPlaylist=(warningInfo)=>{if(!warningInfo)return;const targetStream=warningInfo.stream||F||(L&&L.length>0?L[0]:null);const mode=targetStream?(targetStream.type==="embed"?"embed":B):B;const existingIdx=typeof warningInfo.existingIndex==="number"&&warningInfo.existingIndex>=0?warningInfo.existingIndex:findDuplicateIndex(targetStream);const existingItem=existingIdx!==-1&&existingIdx<d.length?d[existingIdx]:warningInfo.existingItem;const resolvedT=(g||(t&&t.title)||(existingItem&&(existingItem.movieTitle||existingItem.title))||"").trim()||"فيلم سينمائي";const resolvedUrl=(targetStream&&(targetStream.url||targetStream.directUrl))||(existingItem&&existingItem.url)||"";const resolvedDirectUrl=(targetStream&&(targetStream.directUrl||targetStream.url))||(existingItem&&existingItem.directUrl)||"";const newItem={...(existingItem||{}),id:(existingItem&&existingItem.id)||`pl-${Date.now()}-${Math.random().toString(36).substr(2,6)}`,movieId:(t&&t.id)||(existingItem&&existingItem.movieId),movieTitle:resolvedT,title:resolvedT,posterUrl:y||(t&&t.posterUrl)||(existingItem&&existingItem.posterUrl)||"",originalUrl:h||(existingItem&&existingItem.originalUrl)||"",url:resolvedUrl,directUrl:resolvedDirectUrl,streamUrl:resolvedUrl,category:(t&&t.category)||(existingItem&&existingItem.category)||"سينما",selectedStream:targetStream?{...targetStream,preferredMode:mode}:(existingItem?existingItem.selectedStream:null),preferredMode:mode,selectedServer:(targetStream&&targetStream.server)||(existingItem&&existingItem.selectedServer)||"سيرفر",selectedQuality:(targetStream&&targetStream.quality)||(existingItem&&existingItem.selectedQuality)||"HD",selectedType:(targetStream&&targetStream.type)||(existingItem&&existingItem.selectedType)||"stream",allStreams:(L&&L.length>0)?sortStreamsAscending(L):(existingItem&&existingItem.allStreams?sortStreamsAscending(existingItem.allStreams):(targetStream?[targetStream]:[])),wasAutoRepaired:!0,repairedQuality:(targetStream&&targetStream.quality)||(existingItem&&existingItem.repairedQuality)||"HD",repairedAt:new Date().toISOString(),addedAt:(existingItem&&existingItem.addedAt)||new Date().toISOString(),updatedAt:new Date().toISOString(),duration:(t&&t.duration)||(existingItem&&existingItem.duration)};const mTitle=((newItem.movieTitle||"").trim()).toLowerCase();const mId=newItem.movieId;const nTargetUrl=newItem.originalUrl?normalizeVideoKey(newItem.originalUrl):"";const duplicateIndices=[];(d||[]).forEach((it,idx)=>{if(!it)return;if((mId&&it.movieId&&it.movieId===mId)||(nTargetUrl&&it.originalUrl&&normalizeVideoKey(it.originalUrl)===nTargetUrl)||(mTitle&&it.movieTitle&&it.movieTitle.trim().toLowerCase()===mTitle)||(mTitle&&it.title&&it.title.trim().toLowerCase()===mTitle)){duplicateIndices.push(idx);}});let nextPlaylist;let replacedTargetIdx=0;if(duplicateIndices.length>0){const primaryIdx=existingIdx!==-1&&duplicateIndices.includes(existingIdx)?existingIdx:duplicateIndices[0];replacedTargetIdx=primaryIdx;const dupSet=new Set(duplicateIndices.filter(idx=>idx!==primaryIdx));nextPlaylist=d.filter((_,idx)=>!dupSet.has(idx)).map((it,idx)=>(idx===primaryIdx?newItem:it));}else if(existingIdx!==-1&&existingIdx<d.length){replacedTargetIdx=existingIdx;nextPlaylist=[...d];nextPlaylist[existingIdx]=newItem;}else{replacedTargetIdx=d.length;nextPlaylist=[...d,newItem];}if(typeof onUpdatePlaylist==="function"){onUpdatePlaylist(nextPlaylist);}else{ha(nextPlaylist);}try{const rawPls=localStorage.getItem("autocinema_cinema_playlists");const activePlId=localStorage.getItem("autocinema_active_playlist_id")||"playlist-default";let allPls=rawPls?JSON.parse(rawPls):[];if(!Array.isArray(allPls)||allPls.length===0){allPls=[{id:activePlId,name:"قائمة التشغيل الرئيسية",items:nextPlaylist,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()}];}else{const pIdx=allPls.findIndex((p)=>p.id===activePlId);if(pIdx!==-1){allPls[pIdx]={...allPls[pIdx],items:nextPlaylist,updatedAt:new Date().toISOString()};}else{allPls[0]={...allPls[0],items:nextPlaylist,updatedAt:new Date().toISOString()};}}localStorage.setItem("autocinema_cinema_playlists",JSON.stringify(allPls));localStorage.setItem("autocinema_cinema_playlist",JSON.stringify(nextPlaylist));saveAllCinemaPlaylistsToDb(allPls,activePlId).catch((err)=>console.warn(err));}catch(_){}saveCinemaPlaylistToDb(nextPlaylist,replacedTargetIdx).catch((err)=>console.warn(err));try{window.dispatchEvent(new CustomEvent("autocinema:cinema-playlists-updated"));}catch(_){}if(targetStream&&(h||newItem.originalUrl)){saveStreamPreference(h||newItem.originalUrl,targetStream,mode);saveStreamPreferenceToDb(newItem.originalUrl||newItem.url,newItem.selectedStream,mode).catch(()=>{});}M(prev=>{const next=new Set(prev);if(targetStream){next.add(targetStream.url);if(targetStream.id)next.add(targetStream.id);if(targetStream.directUrl)next.add(targetStream.directUrl);}if(L&&L.length>0){L.forEach(st=>{if(!st)return;if(st.url)next.add(st.url);if(st.id)next.add(st.id);if(st.directUrl)next.add(st.directUrl);});}return next;});ae(`✓ تم استبدال الفيلم في قائمة التشغيل مباشرة بالرابط المختار (${newItem.selectedServer} - ${newItem.selectedQuality})! 🔄`);setTimeout(()=>{ae(null)},4000);setDupWarning(null);try{(window as any).__autocinema_pending_replaced_stream={index:replacedTargetIdx,movie:newItem,stream:targetStream,mode:mode};e();if(typeof u==="function"){u(replacedTargetIdx);}window.dispatchEvent(new CustomEvent("autocinema:play-replaced-stream",{detail:{index:replacedTargetIdx,movie:newItem,stream:targetStream,mode:mode}}));}catch(navErr){console.warn("[Auto-navigate to Cinema Screen Error]",navErr);}},_e=(O)=>{const existingIdx=findDuplicateIndex(O);if(existingIdx!==-1){setDupWarning({type:"single",stream:O,title:g||(t==null?void 0:t.title)||"هذا الفيلم",existingIndex:existingIdx,existingItem:d[existingIdx]});return;}const D=ye(O);r(D);saveStreamPreference(h,O,B);M(J=>{const re=new Set(J);re.add(O.url);if(O.id)re.add(O.id);if(O.directUrl)re.add(O.directUrl);return re;});ae(`تمت إضافة (${O.server} - ${O.quality}) إلى قائمة التشغيل بنجاح! 🎬`);setTimeout(()=>{ae(null)},3500);},I=()=>{const existingIdx=findDuplicateIndex(L&&L.length>0?L[0]:null);if(d.length>0&&existingIdx!==-1){setDupWarning({type:"all",count:L.length,title:g||(t==null?void 0:t.title)||"هذا الفيلم",existingIndex:existingIdx,existingItem:d[existingIdx]});return;}L.forEach(D=>{if(!D)return;if(!j.has(D.url)&&!j.has(D.id)){const J=ye(D);r(J);}});const O=new Set(j);L.forEach(D=>{if(!D)return;if(D.url)O.add(D.url);if(D.id)O.add(D.id);if(D.directUrl)O.add(D.directUrl);});M(O);ae(`تمت إضافة جميع السيرفرات (${L.length}) إلى قائمة التشغيل بنجاح! 🎬`);setTimeout(()=>{ae(null)},3500);},ie=(O)=>{const isYtO=!!(O.isYouTube||O.youtubeId||(O.url&&(O.url.includes("youtube")||O.url.includes("youtu.be")||O.url.includes("/api/youtube-player"))));const pref=getStreamPreference(h);const mode=isYtO?"embed":((pref&&pref.playbackMode)?pref.playbackMode:(O.type==="embed"?"embed":"direct"));K(O);H(mode);he(null);saveStreamPreference(h,O,mode);if(O.needsPopout||O.quality==="YouTube App"){const popTarget=O.directUrl||O.url||(O.youtubeId?`https://www.youtube.com/watch?v=${O.youtubeId}`:null);if(popTarget){const w=window.open(popTarget,"_blank","noopener,noreferrer");if(w)try{w.focus()}catch(_){}}}};return l?c.jsxs("div",{onClick:e,className:"fixed inset-0 z-[80] flex items-center justify-center p-2.5 sm:p-5 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200 dir-rtl text-right",children:[c.jsx("div",{onClick:O=>O.stopPropagation(),className:"w-[95vw] max-w-[95vw] h-[95vh] max-h-[95vh] flex flex-col bg-slate-900 border-2 border-indigo-500/40 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200",children:F?(()=>{const O=j.has(F.url)||j.has(F.id)||(F.directUrl?j.has(F.directUrl):!1),ytMatch=(F.url||F.directUrl||h||"").match(/(?:youtube(?:-nocookie)?\.com\/(?:[^\/\n\s]+\/\S+\/(?:v|e(?:mbed)?)\/|\S*?[?&]v=|(?:shorts|live)\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/i),isYtStream=!!(F.isYouTube||F.youtubeId||ytMatch||(F.url&&F.url.includes("/api/youtube-player"))),cleanYtId=F.youtubeId||(ytMatch?ytMatch[1]:null)||(()=>{try{const u=new URL(F.url||"","http://localhost");return u.searchParams.get("v");}catch(_){return null;}})(),embedSrc=isYtStream?((F.url&&(F.url.startsWith("https://www.youtube.com/embed/")||F.url.startsWith("/api/youtube-player")))?F.url:(cleanYtId?`https://www.youtube.com/embed/${cleanYtId}?enablejsapi=1&playsinline=1&rel=0`:F.url)):((F.type==="hls"||F.type==="mp4"||F.url.startsWith("/api/stream-proxy")||F.url.includes(".m3u8")||F.url.includes("/hls/"))?(`/api/player-embed?url=${encodeURIComponent(F.url)}&title=${encodeURIComponent(g||F.server)}${F.subtitles&&F.subtitles[0]?`&sub=${encodeURIComponent(F.subtitles[0].file)}`:""}`):F.url);return c.jsxs("div",{className:"flex flex-col flex-1 overflow-hidden",children:[c.jsxs("div",{className:"flex items-center justify-between p-2 sm:p-2.5 bg-gradient-to-r from-slate-900 via-indigo-950/80 to-slate-900 border-b border-indigo-500/30 gap-2 overflow-x-auto custom-scrollbar flex-nowrap flex-shrink-0",children:[c.jsxs("div",{className:"flex items-center gap-1.5 sm:gap-2 min-w-0 shrink",children:[c.jsx("div",{className:"p-1.5 rounded-lg bg-sky-600/30 text-sky-300 border border-sky-400/30 shadow-inner shrink-0",children:c.jsx(Xn,{className:"w-4 h-4 animate-pulse"})}),c.jsx("span",{className:"px-1.5 py-0.5 rounded-md bg-sky-600 text-white text-[10px] font-black shrink-0",children:"معاينة"}),c.jsx("h3",{className:"text-xs sm:text-sm font-black text-white truncate max-w-[120px] sm:max-w-xs md:max-w-md",title:g||"فيلم بدون عنوان",children:g||"فيلم بدون عنوان"}),c.jsxs("span",{className:"text-[11px] text-amber-300 font-bold shrink-0 hidden md:inline",children:["(",F.server," - ",F.quality,")"]})]}),L.length>1&&(()=>{const curIdx=L.findIndex(s=>s===F||(s.url&&s.url===F.url)||(s.id&&s.id===F.id)),safeIdx=curIdx!==-1?curIdx:0,nextIdx=(safeIdx+1)%L.length,prevIdx=(safeIdx-1+L.length)%L.length,nextS=L[nextIdx],prevS=L[prevIdx];return c.jsxs("div",{className:"flex items-center gap-1 bg-slate-950/90 border border-amber-500/50 rounded-xl p-0.5 shrink-0 shadow-md",title:"الانتقال السريع بين الجودات دون الحاجة لتمرير السكرول",children:[c.jsx("button",{type:"button",onClick:()=>ie(prevS),className:"p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white transition-all cursor-pointer active:scale-95",title:`الجودة السابقة: ${prevS.quality} (${prevS.server})`,children:c.jsx(vl,{className:"w-3.5 h-3.5"})}),c.jsxs("button",{type:"button",onClick:()=>ie(nextS),className:"flex items-center gap-1.5 px-3 py-1 rounded-lg bg-gradient-to-r from-amber-500 via-amber-400 to-amber-500 hover:from-amber-400 hover:to-amber-300 text-slate-950 font-black text-xs transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:`اضغط للانتقال للجودة التالية: ${nextS.quality} (${nextS.server}) دون سكرول`,children:[c.jsx(t1,{className:"w-3.5 h-3.5 stroke-[2.5]"}),c.jsxs("span",{children:["الجودة: ",F.quality]}),c.jsxs("span",{className:"text-[10px] bg-slate-950/30 text-slate-950 px-1 py-0.2 rounded font-mono font-bold",children:[safeIdx+1,"/",L.length]}),c.jsx(Lo,{className:"w-3 h-3 text-slate-950 stroke-[2.5]"})]}),c.jsx("button",{type:"button",onClick:()=>ie(nextS),className:"p-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white transition-all cursor-pointer active:scale-95",title:`الجودة التالية: ${nextS.quality} (${nextS.server})`,children:c.jsx(Qs,{className:"w-3.5 h-3.5"})}),c.jsxs("div",{className:"relative flex items-center shrink-0",children:[c.jsx("select",{value:safeIdx,onChange:ev=>{const target=L[Number(ev.target.value)];target&&ie(target)},className:"appearance-none bg-slate-900 hover:bg-slate-850 text-amber-300 font-bold text-xs pl-6 pr-2 py-1 rounded-lg border border-slate-700 focus:outline-none focus:border-amber-400 cursor-pointer shadow-inner",title:"اختر الجودة المطلوبة مباشرة دون سكرول",children:L.map((s,idx)=>c.jsxs("option",{value:idx,className:"bg-slate-900 text-white font-bold",children:[`${s.quality} - ${s.server}`]},`${s.id || "opt"}-${idx}`))}),c.jsx(Or,{className:"w-3 h-3 text-amber-400 absolute left-1.5 pointer-events-none"})]})]});})(),c.jsxs("div",{className:"flex items-center gap-1.5 shrink-0 flex-nowrap",children:[h&&c.jsxs("a",{href:h,target:"_blank",rel:"noopener noreferrer",className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 text-slate-950 font-black text-xs shadow-md transition-all active:scale-95 cursor-pointer whitespace-nowrap border border-amber-300",title:"عرض رابط الفيلم الأصلي في صفحة خارجية جديدة",children:[c.jsx(Qv,{className:"w-3.5 h-3.5"}),c.jsx("span",{className:"hidden sm:inline",children:"عرض الفيلم في صفحة خارجية ↗"})]}),c.jsxs("button",{type:"button",onClick:e,className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-rose-950/60 text-slate-200 hover:text-rose-200 border border-slate-700 hover:border-rose-500/40 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:"العودة لمكتبة الأفلام",children:[c.jsx(qs,{className:"w-3.5 h-3.5 text-rose-400"}),c.jsx("span",{className:"hidden sm:inline",children:"المكتبة"})]}),c.jsxs("button",{type:"button",onClick:()=>K(null),className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-950/80 hover:bg-indigo-900 text-indigo-200 hover:text-white border border-indigo-500/40 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:"العودة لقائمة السيرفرات والجودات المستخرجة",children:[c.jsx(Po,{className:"w-3.5 h-3.5 text-indigo-400"}),c.jsx("span",{className:"hidden sm:inline",children:"الجودات"})]}),c.jsx("button",{type:"button",onClick:()=>_e(F),className:`flex items-center gap-1 px-2.5 py-1 rounded-lg font-black text-xs border transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap ${O?"bg-emerald-600/30 text-emerald-300 border-emerald-500/50 hover:bg-emerald-600/40":"bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400/50"}`,title:"إضافة هذا السيرفر والجودة إلى قائمة التشغيل (Playlist)",children:O?c.jsxs(c.Fragment,{children:[c.jsx(os,{className:"w-3.5 h-3.5 text-emerald-400 stroke-[3]"}),c.jsx("span",{children:"مضاف"})]}):c.jsxs(c.Fragment,{children:[c.jsx(mi,{className:"w-3.5 h-3.5 stroke-[3]"}),c.jsx("span",{children:"إضافة للـ Playlist"})]})}),findDuplicateIndex(F)!==-1&&c.jsxs("button",{type:"button",onClick:()=>handleReplaceInPlaylist({type:"single",stream:F,title:g,existingIndex:findDuplicateIndex(F),existingItem:d[findDuplicateIndex(F)]}),className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-teal-600 hover:bg-teal-500 text-white font-black text-xs border border-teal-400/50 shadow-sm transition-all cursor-pointer active:scale-95 whitespace-nowrap",title:"استبدال الرابط المختار فوراً في قائمة التشغيل مباشرة",children:[c.jsx(Fr,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:"استبدال بالـ Playlist 🔄"})]}),c.jsxs("button",{type:"button",onClick:()=>{e(),u()},className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-600/40 hover:bg-purple-600 text-purple-200 hover:text-white border border-purple-400/40 text-xs font-bold transition-all cursor-pointer active:scale-95 shadow-sm whitespace-nowrap",title:"الانتقال إلى شاشة العرض وقائمة التشغيل",children:[c.jsx(Ci,{className:"w-3.5 h-3.5 text-amber-300"}),c.jsxs("span",{children:["الـ Playlist (",d.length,")"]})]}),c.jsx("button",{type:"button",onClick:e,className:"p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer shrink-0",title:"إغلاق",children:c.jsx(cs,{className:"w-4 h-4"})})]})]}),de&&c.jsxs("div",{className:"bg-emerald-600 text-white text-xs sm:text-sm font-black px-4 py-2 flex items-center justify-between animate-in fade-in duration-150",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx(os,{className:"w-4 h-4 stroke-[3]"}),c.jsx("span",{children:de})]}),c.jsx("button",{type:"button",onClick:()=>ae(null),className:"p-0.5 hover:bg-emerald-700 rounded cursor-pointer",children:c.jsx(cs,{className:"w-3.5 h-3.5"})})]}),c.jsx("div",{className:"flex-1 overflow-y-auto p-3 sm:p-4 custom-scrollbar bg-slate-950/70 flex flex-col items-center justify-center min-h-[220px]",children:c.jsxs("div",{className:"relative w-full aspect-video max-h-[66vh] sm:max-h-[72vh] rounded-xl overflow-hidden bg-black border-2 border-indigo-500/30 shadow-2xl flex items-center justify-center",children:[(B==="direct"&&F.type!=="embed"&&!isYtStream)?c.jsx("video",{ref:P,controls:!0,playsInline:!0,crossOrigin:"anonymous",className:"w-full h-full object-contain bg-black",children:F.subtitles&&F.subtitles[0]&&c.jsx("track",{kind:"subtitles",src:F.subtitles[0].file.startsWith("/api/")?F.subtitles[0].file:`/api/stream-proxy?url=${encodeURIComponent(F.subtitles[0].file)}`,srcLang:"ar",label:"عربي",default:!0})}):F.needsPopout?c.jsxs("div",{className:"flex flex-col items-center justify-center p-6 text-center space-y-4 bg-slate-900/95 w-full h-full border border-amber-500/30",children:[c.jsx("div",{className:"text-5xl animate-bounce",children:"🎬"}),c.jsx("h4",{className:"text-base sm:text-lg font-black text-amber-300",children:"فتح مباشر في تطبيق وموقع يوتيوب (نافذة مستقلة)"}),c.jsx("p",{className:"text-xs sm:text-sm text-slate-300 max-w-md leading-relaxed",children:"لتجاوز أي حظر أو قيود أمان من المتصفح (مثل حماية Brave Shields أو حظر ملفات تعريف الارتباط)، يعمل الفيديو هنا مباشرة وبكامل الجودة في نافذة مستقلة وبدون أي طلب تسجيل دخول."}),c.jsxs("div",{className:"flex items-center gap-3 flex-wrap justify-center",children:[c.jsxs("button",{type:"button",onClick:()=>{const w=window.open(F.directUrl||F.url||`https://www.youtube.com/watch?v=${cleanYtId}`,"_blank","noopener,noreferrer");if(w)try{w.focus();}catch(_){}},className:"px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs sm:text-sm shadow-lg transition-all cursor-pointer active:scale-95 flex items-center gap-2",children:[c.jsx(Qv,{className:"w-4 h-4 stroke-[2.5]"}),c.jsx("span",{children:"تشغيل فوري في نافذة مستقلة ⚡"})]}),c.jsxs("button",{type:"button",onClick:()=>{if(L&&L.length>0)ie(L[0]);},className:"px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs sm:text-sm border border-slate-700 transition-all cursor-pointer",children:[c.jsx("span",{children:"الرجوع للمشغل المدمج (1080p الافتراضي)"})]})]})]}):c.jsx("iframe",{key:`preview-${isYtStream?"yt":"embed"}-${F.id||F.url}`,src:embedSrc,className:"w-full h-full border-0 bg-black",sandbox:isYtStream?undefined:"allow-scripts allow-same-origin allow-forms allow-presentation allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation",allowFullScreen:!0,referrerPolicy:isYtStream?"strict-origin-when-cross-origin":"no-referrer-when-downgrade",allow:isYtStream?"accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen":"autoplay; fullscreen; encrypted-media; picture-in-picture; cross-origin-isolated",title:`Preview ${F.server}`}),isYtStream&&c.jsxs("div",{className:"absolute top-3 right-3 z-30 flex items-center gap-1.5 pointer-events-auto",children:[c.jsxs("button",{type:"button",onClick:()=>{const w=960,h=560,left=Math.max(0,(window.screen.width-w)/2),top=Math.max(0,(window.screen.height-h)/2),pop=window.open(`https://www.youtube.com/embed/${cleanYtId}?autoplay=1&playsinline=1&rel=0&vq=${(F.url||"").match(/vq=([a-z0-9]+)/i)?.[1]||"medium"}`,"AutoCinemaYT",`width=${w},height=${h},top=${top},left=${left},toolbar=no,menubar=no,location=no,status=no,resizable=yes`);if(pop)pop.focus()},className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-[11px] shadow-lg backdrop-blur-md transition-all cursor-pointer active:scale-95 border border-amber-300",title:"تشغيل في نافذة مستقلة لتجاوز أي حظر أو مطالبة بتسجيل الدخول من يوتيوب",children:[c.jsx(Qv,{className:"w-3 h-3 stroke-[2.5]"}),c.jsx("span",{children:"⚡ تشغيل نافذة مستقلة (تجاوز الحظر)"})]}),c.jsxs("a",{href:`https://www.youtube.com/watch?v=${cleanYtId}`,target:"_blank",rel:"noopener noreferrer",className:"flex items-center gap-1 px-2 py-1 rounded-lg bg-red-600 hover:bg-red-500 text-white font-bold text-[11px] shadow-lg backdrop-blur-md transition-all cursor-pointer border border-red-400/40",title:"فتح في موقع وتطبيق يوتيوب مباشرة",children:[c.jsx("span",{children:"يوتيوب ↗"})]})]}),L.length>1&&(()=>{const curIdx=L.findIndex(s=>s===F||(s.url&&s.url===F.url)||(s.id&&s.id===F.id)),safeIdx=curIdx!==-1?curIdx:0,nextIdx=(safeIdx+1)%L.length,nextS=L[nextIdx];return c.jsx("div",{className:"absolute top-3 left-3 z-30 pointer-events-auto",children:c.jsxs("button",{type:"button",onClick:()=>ie(nextS),className:"flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950/85 hover:bg-slate-900 text-amber-300 hover:text-amber-200 border border-amber-500/60 hover:border-amber-400 backdrop-blur-md font-black text-xs shadow-2xl transition-all cursor-pointer active:scale-95",title:`الانتقال للجودة التالية: ${nextS.quality} (${nextS.server}) دون الحاجة لتمرير السكرول`,children:[c.jsx(t1,{className:"w-3.5 h-3.5 text-amber-400"}),c.jsxs("span",{children:["الجودة: ",F.quality]}),c.jsxs("span",{className:"px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono",children:[safeIdx+1,"/",L.length]}),c.jsx("span",{className:"text-[10px] font-bold text-amber-400",children:"⇄ التالي"})]})});})(),W&&c.jsxs("div",{className:"absolute top-3 inset-x-3 p-2.5 rounded-lg bg-red-950/90 border border-red-500/50 text-red-200 text-xs flex items-center justify-between gap-2 shadow-lg backdrop-blur-sm",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx(Uo,{className:"w-4 h-4 text-red-400 flex-shrink-0"}),c.jsx("span",{children:W})]}),B!=="embed"&&c.jsx("button",{type:"button",onClick:()=>H("embed"),className:"px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-black cursor-pointer",children:"تجربة مشغل السيرفر Embed"}),c.jsxs("button",{type:"button",onClick:()=>{const popUrl=F.directUrl||F.url;if(popUrl){const w=window.open(popUrl,"_blank","noopener,noreferrer");if(w){try{w.blur();window.focus();}catch(_){}}}},className:"px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-black cursor-pointer flex items-center gap-1",children:[c.jsx(Qv,{className:"w-3 h-3"}),c.jsx("span",{children:"نافذة مستقلة"})]})]})]})}),c.jsxs("div",{className:"p-2 sm:p-3 bg-slate-950 border-t border-slate-800 space-y-2 flex-shrink-0 z-10",children:[c.jsxs("div",{className:"flex items-center gap-1.5 sm:gap-2 overflow-x-auto custom-scrollbar flex-nowrap text-xs pb-1",children:[c.jsxs("div",{className:"flex items-center gap-1 px-2 py-1 rounded-lg bg-indigo-600 text-white font-black shrink-0 shadow-sm whitespace-nowrap",children:[c.jsx(Ci,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:F.server})]}),c.jsx("div",{className:`px-2 py-1 rounded-lg text-xs font-black border shrink-0 font-mono whitespace-nowrap ${F.quality.includes("1080")||F.quality.includes("4K")?"bg-purple-950/90 text-purple-300 border-purple-500/50":F.quality.includes("720")?"bg-sky-950/90 text-sky-300 border-sky-500/50":"bg-slate-800 text-amber-300 border-slate-700"}`,children:F.quality}),L.length>1&&(()=>{const curIdx=L.findIndex(s=>s===F||(s.url&&s.url===F.url)||(s.id&&s.id===F.id)),safeIdx=curIdx!==-1?curIdx:0,nextIdx=(safeIdx+1)%L.length,nextS=L[nextIdx];return c.jsxs("button",{type:"button",onClick:()=>ie(nextS),className:"flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs transition-all cursor-pointer active:scale-95 shrink-0 shadow-sm whitespace-nowrap",title:`الانتقال السريع للجودة التالية: ${nextS.quality} (${nextS.server}) دون سكرول`,children:[c.jsx(Lo,{className:"w-3 h-3 stroke-[2.5]"}),c.jsxs("span",{children:["الجودة التالية (",nextS.quality,")"]})]});})(),c.jsxs("div",{className:"flex items-center gap-0.5 bg-slate-900 p-0.5 rounded-lg border border-slate-800 shrink-0",children:[c.jsx("button",{type:"button",onClick:()=>{H("direct");if(F)saveStreamPreference(h,F,"direct");},className:`px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${B==="direct"?"bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400":"text-slate-400 hover:text-white"}`,title:"مشغل الفيديو المباشر HLS/MP4",children:"مباشر"}),c.jsx("button",{type:"button",onClick:()=>{H("embed");if(F)saveStreamPreference(h,F,"embed");},className:`px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap ${B==="embed"?"bg-indigo-600 text-white shadow-sm ring-1 ring-indigo-400":"text-slate-400 hover:text-white"}`,title:"مشغل سيرفر المصدر Embed",children:"Embed"}),c.jsxs("button",{type:"button",onClick:()=>{const popUrl=F.directUrl||F.url;if(popUrl){const w=window.open(popUrl,"_blank","noopener,noreferrer");if(w){try{w.blur();window.focus();}catch(_){}}}},className:"px-2 py-1 rounded text-[11px] font-bold transition-all cursor-pointer whitespace-nowrap text-amber-300 hover:text-white bg-amber-950/60 hover:bg-amber-800 border border-amber-600/40 flex items-center gap-1",title:"فتح في نافذة مستقلة لتجاوز قيود التضمين",children:[c.jsx(Qv,{className:"w-3 h-3 text-amber-300"}),c.jsx("span",{children:"نافذة مستقلة"})]})]}),c.jsxs("div",{className:"flex-1 min-w-[200px] sm:min-w-[260px] flex items-center justify-between gap-1.5 bg-slate-900 px-2 py-1 rounded-lg border border-slate-700/80 text-slate-300 shrink-0 sm:shrink",children:[c.jsx("span",{className:"text-[10px] font-black text-amber-400 shrink-0 font-sans",children:"الرابط:"}),c.jsx("span",{className:"flex-1 truncate select-all font-mono text-[11px] text-slate-200 min-w-0",title:F.directUrl||F.url,children:F.directUrl||F.url}),c.jsx("button",{type:"button",onClick:()=>ve(F.directUrl||F.url,F.id),className:"flex items-center gap-1 text-[11px] font-sans font-bold bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white px-2 py-0.5 rounded border border-slate-700 transition-all cursor-pointer shrink-0 active:scale-95",title:"نسخ رابط البث المستخرج",children:_===F.id?c.jsxs(c.Fragment,{children:[c.jsx(os,{className:"w-3 h-3 text-emerald-400"}),c.jsx("span",{className:"text-emerald-300",children:"تم"})]}):c.jsxs(c.Fragment,{children:[c.jsx(Bo,{className:"w-3 h-3"}),c.jsx("span",{children:"نسخ"})]})})]})]}),L.length>0&&c.jsxs("div",{className:"pt-1.5 border-t border-slate-800/80",children:[c.jsxs("div",{className:"flex items-center gap-1.5 mb-1",children:[c.jsx(t1,{className:"w-3.5 h-3.5 text-amber-400"}),c.jsx("span",{className:"text-xs font-black text-white",children:"الجودات والسيرفرات المستخرجة:"}),c.jsxs("span",{className:"px-1.5 py-0.2 rounded-full bg-indigo-600/40 text-indigo-300 text-[10px] font-bold",children:[L.length," متاح"]})]}),c.jsx("div",{className:"flex items-center gap-1.5 overflow-x-auto custom-scrollbar flex-nowrap py-1",children:L.map((D,J)=>{const re=F&&(D.url===F.url||(D.id&&F.id&&D.id===F.id)),Ae=j.has(D.url)||j.has(D.id)||D.directUrl&&j.has(D.directUrl);return c.jsxs("button",{type:"button",onClick:()=>ie(D),className:`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer flex items-center gap-1.5 shrink-0 whitespace-nowrap ${re?"bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-400 shadow-md ring-2 ring-indigo-400/60 font-black scale-[1.02]":"bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700 hover:border-slate-600"}`,title:`معاينة سيرفر ${D.server} بجودة ${D.quality}`,children:[c.jsx("span",{children:D.server}),c.jsx("span",{className:`px-1.5 py-0.2 rounded text-[10px] font-mono font-black ${re?"bg-amber-400 text-slate-950":"bg-slate-800 text-amber-300 border border-slate-700"}`,children:D.quality}),re&&c.jsx(os,{className:"w-3.5 h-3.5 text-white stroke-[3]"}),Ae&&!re&&c.jsx("span",{className:"text-[10px] text-emerald-400",title:"مضاف بالـ Playlist",children:"✔"})]},`${D.id || "stream"}-${J}`)})})]})]})]})})():c.jsxs("div",{className:"flex flex-col flex-1 overflow-hidden",children:[c.jsxs("div",{className:"flex items-center justify-between p-4 sm:p-5 bg-gradient-to-r from-slate-900 via-indigo-950/70 to-slate-900 border-b border-indigo-500/30",children:[c.jsxs("div",{className:"flex items-center gap-3",children:[c.jsx("div",{className:"p-2.5 rounded-xl bg-indigo-600/30 text-indigo-300 border border-indigo-400/30 shadow-inner",children:c.jsx(Io,{className:"w-6 h-6 animate-pulse"})}),c.jsxs("div",{children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx("h3",{className:"text-lg sm:text-xl font-black text-white",children:"استخراج سيرفرات وبث الفيديو"}),c.jsx("span",{className:"px-2 py-0.5 rounded-full bg-indigo-600 text-[11px] font-black text-amber-300 border border-indigo-400/40",children:"شاشة العرض 🎬"})]}),c.jsx("p",{className:"text-xs text-slate-300 mt-0.5",children:"فحص صفحة الفيلم، استخراج السيرفرات والجودات المختلفة ومعاينتها واختيارها لـ Playlist شاشة العرض"})]})]}),c.jsxs("div",{className:"flex items-center gap-2",children:[h&&c.jsxs("a",{href:h,target:"_blank",rel:"noopener noreferrer",className:"flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 text-slate-950 font-black text-xs shadow-md transition-all active:scale-95 cursor-pointer whitespace-nowrap border border-amber-300",title:"عرض رابط الفيلم الأصلي في صفحة خارجية جديدة",children:[c.jsx(Qv,{className:"w-4 h-4"}),c.jsx("span",{children:"عرض الفيلم في صفحة خارجية ↗"})]}),c.jsxs("button",{type:"button",onClick:e,className:"flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 text-xs font-bold transition-all cursor-pointer active:scale-95",title:"العودة للمكتبة",children:[c.jsx(qs,{className:"w-4 h-4 text-rose-400"}),c.jsx("span",{children:"العودة للمكتبة"})]}),c.jsx("button",{type:"button",onClick:e,className:"p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors cursor-pointer",title:"إغلاق",children:c.jsx(cs,{className:"w-5 h-5"})})]})]}),de&&c.jsxs("div",{className:"bg-emerald-600 text-white text-xs sm:text-sm font-black px-4 py-2 flex items-center justify-between animate-in fade-in duration-150",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsx(os,{className:"w-4 h-4 stroke-[3]"}),c.jsx("span",{children:de})]}),c.jsx("button",{type:"button",onClick:()=>ae(null),className:"p-0.5 hover:bg-emerald-700 rounded cursor-pointer",children:c.jsx(cs,{className:"w-3.5 h-3.5"})})]}),c.jsxs("div",{className:"p-4 bg-slate-950/50 border-b border-slate-800",children:[c.jsxs("div",{className:"flex flex-col sm:flex-row gap-2",children:[c.jsxs("div",{className:"relative flex-1",children:[c.jsx("input",{type:"text",value:h,onChange:O=>m(O.target.value),onKeyDown:O=>{O.key==="Enter"&&fe(h)},placeholder:"أدخل أو الصق رابط صفحة الفيلم أو فيديو يوتيوب (مثلاً: https://youtube.com/watch?v=... أو aflam18.media/...)",className:"w-full px-3.5 py-2.5 text-xs sm:text-sm bg-slate-900 text-slate-100 rounded-xl border border-slate-700 focus:outline-none focus:border-indigo-400 focus:ring-1 focus:ring-indigo-400 font-mono"}),c.jsxs("button",{type:"button",onClick:()=>{m("https://www.youtube.com/watch?v=xu0xx44X42I");p("فيلم الهلفوت - عادل إمام");fe("https://www.youtube.com/watch?v=xu0xx44X42I","فيلم الهلفوت - عادل إمام");},className:"mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/30 text-[11px] font-bold transition-all cursor-pointer shadow-sm",title:"تجربة فورية لرابط اليوتيوب المطلوب",children:[c.jsx("span",{className:"w-2 h-2 rounded-full bg-red-500 animate-ping"}),c.jsx("span",{children:"🎬 تجربة سريعة: فيلم الهلفوت (عادل إمام) - يوتيوب"})]})]}),c.jsxs("button",{type:"button",onClick:()=>fe(h),disabled:S||!h.trim(),className:"px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-black text-xs sm:text-sm rounded-xl transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95 whitespace-nowrap",children:[S?c.jsx(Fr,{className:"w-4 h-4 animate-spin"}):c.jsx($i,{className:"w-4 h-4"}),c.jsx("span",{children:S?"جاري الفحص...":"فحص واستخراج السيرفرات"})]})]}),c.jsxs("div",{className:"mt-2.5 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 text-xs font-bold text-slate-300",children:[c.jsxs("div",{className:"flex items-center gap-1.5 shrink-0 text-amber-300",children:[c.jsx(qs,{className:"w-4 h-4 text-amber-400 flex-shrink-0"}),c.jsx("span",{children:"اسم الفيلم في شاشة العرض:"})]}),c.jsx("input",{type:"text",value:g,onChange:O=>p(O.target.value),placeholder:"اكتب اسم الفيلم أو دعه يُكتشف تلقائياً...",className:"flex-1 px-3 py-1.5 bg-slate-900 border border-slate-700 focus:border-amber-400 rounded-lg text-white font-bold text-xs focus:outline-none"})]})]}),c.jsxs("div",{className:"flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 custom-scrollbar",children:[S&&c.jsxs("div",{className:"py-12 flex flex-col items-center justify-center text-center space-y-3",children:[c.jsxs("div",{className:"relative",children:[c.jsx("div",{className:"w-14 h-14 rounded-full border-4 border-indigo-500/20 border-t-indigo-500 animate-spin"}),c.jsx(Io,{className:"w-6 h-6 text-indigo-400 absolute inset-0 m-auto animate-pulse"})]}),c.jsxs("div",{className:"space-y-1",children:[c.jsx("p",{className:"text-sm font-black text-white",children:"جاري الاتصال بصفحة الفيلم أو اليوتيوب وفحص السيرفرات والجودات..."}),c.jsx("p",{className:"text-xs text-slate-400",children:"استخراج جودات وروابط البث (YouTube, HLS, MP4, Iframe Embed)"})]})]}),T&&!S&&c.jsxs("div",{className:"p-4 rounded-xl bg-red-950/40 border border-red-500/40 flex items-start gap-3 text-red-200 text-xs sm:text-sm",children:[c.jsx(Uo,{className:"w-5 h-5 text-red-400 flex-shrink-0 mt-0.5"}),c.jsxs("div",{className:"space-y-1",children:[c.jsx("p",{className:"font-black text-red-300",children:T}),c.jsx("p",{className:"text-slate-400 text-xs",children:"تأكد من أن الرابط مباشر لصفحة الفيلم أو فيديو يوتيوب يحتوي على مشغل فيديو."})]})]}),!S&&L.length>0&&c.jsxs("div",{className:"space-y-3",children:[c.jsxs("div",{className:"flex items-center justify-between pb-2 border-b border-slate-800",children:[c.jsxs("div",{className:"flex items-center gap-2",children:[c.jsxs("span",{className:"text-sm font-black text-white",children:["تم اكتشاف ",L.length," سيرفر/بث متاح:"]}),c.jsx("span",{className:"px-2 py-0.5 bg-emerald-950 text-emerald-300 border border-emerald-500/40 rounded-full text-xs font-black",children:"جاهز للمعاينة والإضافة"})]}),c.jsxs("button",{type:"button",onClick:I,className:"flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600/30 hover:bg-indigo-600 text-indigo-200 hover:text-white border border-indigo-400/40 text-xs font-bold transition-all cursor-pointer shadow-sm active:scale-95",children:[c.jsx(mi,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:"إضافة الكل إلى Playlist"})]})]}),c.jsx("div",{className:"grid grid-cols-1 gap-2.5",children:L.map((O,D)=>{const J=j.has(O.url)||j.has(O.id)||O.directUrl&&j.has(O.directUrl),re=_===O.id;return c.jsx("div",{className:`p-3.5 rounded-xl border transition-all ${J?"bg-emerald-950/30 border-emerald-500/40":"bg-slate-850/80 hover:bg-slate-800 border-slate-700/80 hover:border-indigo-500/40"}`,children:c.jsxs("div",{className:"flex flex-col sm:flex-row sm:items-center justify-between gap-3",children:[c.jsxs("div",{className:"space-y-1.5 min-w-0",children:[c.jsxs("div",{className:"flex items-center flex-wrap gap-2",children:[c.jsxs("span",{className:"px-2.5 py-0.5 rounded-lg bg-indigo-600 text-white font-black text-xs sm:text-sm shadow-sm flex items-center gap-1.5",children:[c.jsx(Ci,{className:"w-3.5 h-3.5"}),c.jsx("span",{children:O.server})]}),c.jsx("span",{className:`px-2 py-0.5 rounded-md text-[11px] font-black border ${O.quality.includes("1080")||O.quality.includes("4K")?"bg-purple-950/80 text-purple-300 border-purple-500/40":O.quality.includes("720")?"bg-sky-950/80 text-sky-300 border-sky-500/40":"bg-slate-800 text-amber-300 border-slate-700"}`,children:O.quality}),c.jsx("span",{className:"px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-300 text-[10px] font-bold border border-slate-700 font-mono",children:O.type==="hls"?"⚡ HLS M3U8 مباشر":O.type==="mp4"?"🎬 MP4 مباشر":"🌐 مشغل سيرفر Embed"})]}),c.jsxs("div",{className:"flex items-center gap-2 text-xs font-mono text-slate-400 truncate",children:[c.jsx("span",{className:"truncate max-w-[280px] sm:max-w-md",children:O.directUrl||O.url}),c.jsx("button",{type:"button",onClick:()=>ve(O.directUrl||O.url,O.id),className:"text-slate-400 hover:text-white p-1 rounded hover:bg-slate-700 flex-shrink-0 cursor-pointer",title:"نسخ الرابط",children:re?c.jsx(os,{className:"w-3.5 h-3.5 text-emerald-400"}):c.jsx(Bo,{className:"w-3.5 h-3.5"})})]})]}),c.jsxs("div",{className:"flex items-center gap-2 flex-shrink-0",children:[c.jsxs("button",{type:"button",onClick:()=>ie(O),className:"flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-black text-xs sm:text-sm shadow-md transition-all cursor-pointer active:scale-95 whitespace-nowrap border border-sky-400/30",title:"معاينة هذا البث والجودة في شاشة المعاينة",children:[c.jsx(Xn,{className:"w-4 h-4 text-sky-200"}),c.jsx("span",{children:"معاينة البث"})]}),c.jsx("button",{type:"button",onClick:()=>_e(O),className:`flex items-center gap-1.5 px-3.5 py-2 rounded-xl font-black text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 whitespace-nowrap ${J?"bg-emerald-600/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-600/30":"bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-400/50 shadow-md"}`,title:J?"موجود بالفعل في الـ Playlist":"إضافة هذا السيرفر إلى قائمة شاشة العرض",children:J?c.jsxs(c.Fragment,{children:[c.jsx(os,{className:"w-4 h-4 text-emerald-400 stroke-[3]"}),c.jsx("span",{children:"مضاف بالـ Playlist"})]}):c.jsxs(c.Fragment,{children:[c.jsx(mi,{className:"w-4 h-4 stroke-[2.5]"}),c.jsx("span",{children:"إضافة للـ Playlist"})]})}),findDuplicateIndex(O)!==-1&&c.jsxs("button",{type:"button",onClick:()=>handleReplaceInPlaylist({type:"single",stream:O,title:g,existingIndex:findDuplicateIndex(O),existingItem:d[findDuplicateIndex(O)]}),className:"flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs sm:text-sm border border-teal-400/50 shadow-md transition-all cursor-pointer active:scale-95 whitespace-nowrap",title:"استبدال هذا السيرفر والجودة مباشرة في قائمة التشغيل",children:[c.jsx(Fr,{className:"w-3.5 h-3.5 stroke-[2.5]"}),c.jsx("span",{children:"استبدال في القائمة 🔄"})]}),]})]})},`${O.id || "card"}-${D}`)})})]}),!S&&L.length===0&&!T&&c.jsxs("div",{className:"py-8 text-center text-slate-400 space-y-2",children:[c.jsx(Io,{className:"w-10 h-10 text-slate-600 mx-auto"}),c.jsx("p",{className:"text-sm font-bold",children:'أدخل رابط أي فيلم أو فيديو يوتيوب واضغط على "فحص واستخراج السيرفرات" للبدء.'}),c.jsx("p",{className:"text-xs text-slate-500",children:"يدعم روابط يوتيوب (YouTube / Shorts) ومواقع aflam18.media و aflamicose.com وسيرفرات Uqload و Filemoon و Stream وغيرها."})]})]}),c.jsxs("div",{className:"p-4 bg-slate-950 border-t border-slate-800 flex items-center justify-between gap-3",children:[c.jsxs("button",{type:"button",onClick:e,className:"flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs sm:text-sm font-bold transition-colors cursor-pointer",children:[c.jsx(qs,{className:"w-4 h-4 text-rose-400"}),c.jsx("span",{children:"العودة للمكتبة"})]}),c.jsxs("button",{type:"button",onClick:()=>{e(),u()},className:"flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-purple-600 hover:from-purple-500 hover:to-indigo-500 text-white font-black text-xs sm:text-sm transition-all shadow-lg shadow-indigo-600/30 cursor-pointer active:scale-95",children:[c.jsx(Ci,{className:"w-4.5 h-4.5 text-amber-300"}),c.jsxs("span",{children:["الانتقال إلى شاشة العرض (",d.length," عنصر)"]}),c.jsx(vl,{className:"w-4 h-4"})]})]})]})}),dupWarning&&c.jsx("div",{onClick:O=>O.stopPropagation(),className:"fixed inset-0 z-[95] flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-150 dir-rtl",children:c.jsxs("div",{className:"w-full max-w-lg bg-slate-900 border-2 border-amber-500/80 rounded-2xl shadow-2xl p-4 sm:p-6 text-right space-y-4 animate-in zoom-in-95 duration-150",children:[c.jsxs("div",{className:"flex items-start gap-3",children:[c.jsx("div",{className:"p-2.5 rounded-xl bg-amber-500/20 text-amber-400 border border-amber-500/40 flex-shrink-0 mt-0.5 shadow-inner",children:c.jsx(Uo,{className:"w-6 h-6 animate-bounce"})}),c.jsxs("div",{className:"space-y-1.5 flex-1 min-w-0",children:[c.jsx("h4",{className:"text-sm sm:text-base font-black text-amber-300",children:"⚠️ تنبيه: الفيلم موجود بالفعل في قائمة تشغيل شاشة العرض!"}),c.jsxs("p",{className:"text-xs sm:text-sm text-slate-300 leading-relaxed",children:["الفيلم ",c.jsxs("span",{className:"font-black text-white underline decoration-amber-400/50 underline-offset-2",children:[',dupWarning.title,']})," موجود مسبقاً ضمن عناصر قائمة التشغيل (Playlist) لشاشة العرض."]})]})]}),c.jsxs("div",{className:"bg-slate-950/80 rounded-xl p-3 sm:p-3.5 border border-slate-800 space-y-2.5 text-xs",children:[c.jsxs("div",{className:"flex items-center justify-between gap-2 p-2.5 rounded-lg bg-slate-900/90 border border-slate-700/60",children:[c.jsxs("div",{className:"flex items-center gap-2 min-w-0",children:[c.jsx("span",{className:"px-2 py-0.5 rounded-md bg-slate-800 text-slate-400 text-[10px] font-black border border-slate-700 shrink-0",children:"الفيلم القديم في القائمة"}),c.jsx("span",{className:"text-slate-300 font-medium truncate text-[11px]",children:dupWarning.existingItem?`سيرفر: ${dupWarning.existingItem.selectedServer||(dupWarning.existingItem.selectedStream&&dupWarning.existingItem.selectedStream.server)||"افتراضي"} (${dupWarning.existingItem.selectedQuality||(dupWarning.existingItem.selectedStream&&dupWarning.existingItem.selectedStream.quality)||"HD"})`:"موجود بروابطه السابقة"})]}),dupWarning.existingItem&&dupWarning.existingItem.allStreams&&c.jsxs("span",{className:"text-[10px] font-mono text-slate-400 bg-slate-800/80 px-2 py-0.5 rounded shrink-0",children:[dupWarning.existingItem.allStreams.length," سيرفر قديم"]})]}),c.jsxs("div",{className:"flex items-center justify-between gap-2 p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/40 text-emerald-200",children:[c.jsxs("div",{className:"flex items-center gap-2 min-w-0",children:[c.jsx("span",{className:"px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black shrink-0",children:"الروابط الجديدة المُستخرجة"}),c.jsx("span",{className:"text-emerald-300 font-bold truncate text-[11px]",children:dupWarning.stream?`سيرفر: ${dupWarning.stream.server} (${dupWarning.stream.quality})`:`جميع السيرفرات الجديدة المستخرجة (${L.length} سيرفر)`})]}),c.jsxs("span",{className:"text-[10px] font-mono text-emerald-300 bg-emerald-900/60 border border-emerald-600/40 px-2 py-0.5 rounded shrink-0",children:[L.length," سيرفر نشط ⚡"]})]}),c.jsx("p",{className:"text-[11px] text-amber-200/90 leading-tight pt-1",children:"💡 لا يُسمح بتكرار نفس الفيلم في نفس قائمة التشغيل. يمكنك استبدال النسخة القديمة بالروابط والجودات الجديدة المُستخرجة أو إلغاء الإضافة."})]}),c.jsxs("div",{className:"flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-2 pt-2 border-t border-slate-800",children:[c.jsx("button",{type:"button",onClick:()=>setDupWarning(null),className:"px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-bold transition-all cursor-pointer active:scale-95 text-center",children:"إلغاء الإضافة"}),c.jsxs("button",{type:"button",onClick:()=>handleReplaceInPlaylist(dupWarning),className:"flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-950/60 border border-emerald-400/50 transition-all cursor-pointer active:scale-95 text-center flex-1 sm:flex-initial",children:[c.jsx(Fr,{className:"w-4 h-4 text-emerald-100 stroke-[2.5]"}),c.jsx("span",{children:"استبدال الفيلم القديم بالروابط الجديدة 🔄"})]})]})]})})]}):null},zI = CinemaScreenModal;
 function VI() {
   const [l, e] = q.useState(() => {
     try {
@@ -19000,24 +21576,19 @@ function VI() {
       } catch (_) {}
     }
 
-    if (data.movies && Array.isArray(data.movies) && data.movies.length > 0) {
+    const incomingMovies = [
+      ...(Array.isArray(data.repoMovies) ? data.repoMovies : []),
+      ...(Array.isArray(data.movies) ? data.movies : []),
+      ...(Array.isArray(data.customMovies) ? data.customMovies : []),
+    ];
+    if (incomingMovies.length > 0) {
       i((prev) => {
         const mMap = new Map(prev.map((m) => [m.id, m]));
-        data.movies.forEach((dm) => {
+        incomingMovies.forEach((dm) => {
           if (dm && dm.id) {
             const existing = mMap.get(dm.id);
             mMap.set(dm.id, { ...(existing || {}), ...dm, isFavorite: existing?.isFavorite || dm.isFavorite });
           }
-        });
-        const updated = Array.from(mMap.values());
-        pl(updated);
-        return updated;
-      });
-    } else if (data.customMovies && Array.isArray(data.customMovies) && data.customMovies.length > 0) {
-      i((prev) => {
-        const mMap = new Map(prev.map((m) => [m.id, m]));
-        data.customMovies.forEach((cm) => {
-          if (cm && cm.id) mMap.set(cm.id, { ...(mMap.get(cm.id) || {}), ...cm });
         });
         const updated = Array.from(mMap.values());
         pl(updated);
@@ -19610,13 +22181,98 @@ function VI() {
       Z(!0));
   };
 
+  const isDirectMediaUrl = (u?: string) =>
+    !!u &&
+    (u.includes(".m3u8") ||
+      u.includes("/hls/") ||
+      u.startsWith("/api/stream-proxy") ||
+      u.includes(".mp4") ||
+      u.includes(".ts"));
+
+  const getCleanMovieExternalUrl = (V: any): string => {
+    if (!V) return "";
+    if (typeof V === "string") {
+      let raw = V.trim();
+      while (raw.includes("proxy?url=")) {
+        const m = raw.match(/proxy\?url=([^&]+)/i);
+        if (m && m[1]) {
+          try {
+            const dec = decodeURIComponent(m[1]);
+            if (dec.startsWith("http://") || dec.startsWith("https://")) {
+              raw = dec;
+            } else break;
+          } catch (_) { break; }
+        } else break;
+      }
+      return raw;
+    }
+
+    // 1. Try originalUrl if it is a valid external web page
+    if (V.originalUrl && typeof V.originalUrl === "string") {
+      const u = V.originalUrl.trim();
+      if (u.startsWith("http://") || u.startsWith("https://")) {
+        if (!u.includes("/api/") && !isDirectMediaUrl(u)) return u;
+      }
+    }
+
+    // 2. Try embedUrl if it is a valid external web page
+    if (V.embedUrl && typeof V.embedUrl === "string") {
+      const u = V.embedUrl.trim();
+      if (u.startsWith("http://") || u.startsWith("https://")) {
+        if (!u.includes("/api/") && !isDirectMediaUrl(u)) return u;
+      }
+    }
+
+    // 3. Try url if it is a direct web page
+    if (V.url && typeof V.url === "string") {
+      const u = V.url.trim();
+      if (u.startsWith("http://") || u.startsWith("https://")) {
+        if (!u.includes("/api/") && !isDirectMediaUrl(u)) return u;
+      }
+    }
+
+    // 4. If any field contains an internal proxy wrapper, unwrap it
+    for (const candidate of [V.originalUrl, V.embedUrl, V.url]) {
+      if (!candidate || typeof candidate !== "string") continue;
+      const refMatch = candidate.match(/[?&]ref=([^&]+)/i);
+      if (refMatch && refMatch[1]) {
+        try {
+          const decodedRef = decodeURIComponent(refMatch[1]);
+          if (
+            (decodedRef.startsWith("http://") || decodedRef.startsWith("https://")) &&
+            !decodedRef.includes("/api/") &&
+            !isDirectMediaUrl(decodedRef)
+          ) {
+            return decodedRef;
+          }
+        } catch (_) {}
+      }
+
+      const urlMatch = candidate.match(/[?&]url=([^&]+)/i);
+      if (urlMatch && urlMatch[1]) {
+        try {
+          const decodedUrl = decodeURIComponent(urlMatch[1]);
+          if (
+            (decodedUrl.startsWith("http://") || decodedUrl.startsWith("https://")) &&
+            !decodedUrl.includes("/api/")
+          ) {
+            return decodedUrl;
+          }
+        } catch (_) {}
+      }
+    }
+
+    return (V.embedUrl || V.url || V.originalUrl || "").trim();
+  };
+
   const be = (V) => {
     if (typeof V === "string") {
-      ie(V);
+      ie(getCleanMovieExternalUrl(V));
       _e(null);
     } else if (V) {
       _e(V);
-      ie(V.url || V.embedUrl || V.originalUrl || "");
+      const candUrl = getCleanMovieExternalUrl(V);
+      ie(candUrl);
     } else {
       _e(null);
       ie("");
@@ -19667,6 +22323,19 @@ function VI() {
       localStorage.setItem("autocinema_font_scale", G.toString());
     } catch {}
   }, [G]);
+
+  q.useEffect(() => {
+    try {
+      if (typeof window !== "undefined" && window.location.search) {
+        const params = new URLSearchParams(window.location.search);
+        const pUrl = params.get("playUrl") || params.get("extractUrl");
+        if (pUrl) {
+          be(pUrl);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }
+    } catch (_) {}
+  }, []);
   const je = () => {
       Se((V) => Math.min(200, Math.round((V + 10) * 10) / 10));
     },
@@ -19863,17 +22532,17 @@ function VI() {
 
           // Background sync to disk fav.json if repaired items exist
           try {
-            if (mergedActiveItems.some((it: any) => it && it.wasAutoRepaired)) {
+            if (finalActiveItems.some((it: any) => it && it.wasAutoRepaired)) {
               fetch("/api/update-cinema-playlist", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ cinemaPlaylist: mergedActiveItems }),
+                body: JSON.stringify({ cinemaPlaylist: finalActiveItems }),
               }).catch(() => {});
             }
           } catch (_) {}
 
           try {
-            mergedActiveItems.forEach((item: any) => {
+            finalActiveItems.forEach((item: any) => {
               if (item && (item.originalUrl || (item.selectedStream && item.selectedStream.url) || item.url)) {
                 saveStreamPreference(
                   item.originalUrl || (item.selectedStream && item.selectedStream.url) || item.url || "",
@@ -19929,9 +22598,10 @@ function VI() {
         });
         notifyUploadProgress(85, "4/5: جاري مطابقة ودمج الأفلام المعدلة والمضافة...");
 
-        const [dbUserMods, dbMovies] = await Promise.all([
+        const [dbUserMods, dbMovies, dbRepoResult] = await Promise.all([
           fetchUserModificationsFromDb().catch(() => null),
           fetchMoviesFromDb().catch(() => []),
+          fetchAllRepositoryMoviesFromDb().catch(() => null),
         ]);
 
         // المرحلة 5: إنهاء دمج البيانات وتحديث المفضلة وتأكيد النسخة المدمجة محلياً
@@ -19993,6 +22663,14 @@ function VI() {
             dbMovies.forEach((dm) => {
               if (dm && dm.id) {
                 movieMap.set(dm.id, { ...(movieMap.get(dm.id) || {}), ...dm });
+              }
+            });
+          }
+          if (dbRepoResult && Array.isArray(dbRepoResult.movies) && dbRepoResult.movies.length > 0) {
+            dbRepoResult.movies.forEach((rm) => {
+              if (rm && rm.id) {
+                const existing = movieMap.get(rm.id);
+                movieMap.set(rm.id, { ...(existing || {}), ...rm, isFavorite: existing?.isFavorite || rm.isFavorite });
               }
             });
           }
@@ -21155,24 +23833,184 @@ function VI() {
       );
       dt(Ce);
     },
-    Tt = (V, me) => {
-      const pe = new Set(V),
-        Ne = t.map((Ce) =>
-          pe.has(Ce.id) ? { ...Ce, parentFolderId: me } : Ce,
+    handleBatchDeleteMovies = (movieIds: string[]) => {
+      if (!movieIds || movieIds.length === 0) return;
+      const idsSet = new Set(movieIds);
+      const remaining = t.filter((m) => !idsSet.has(m.id));
+      dt(remaining);
+
+      // Remove from active cinema playlist if present
+      U((prevPl: any[]) => {
+        const curPl = Array.isArray(prevPl) ? prevPl : [];
+        const filteredPl = curPl.filter((item: any) => {
+          const mId = item?.movieId || item?.id;
+          return !idsSet.has(mId);
+        });
+        if (filteredPl.length !== curPl.length) {
+          ha(filteredPl);
+          saveCinemaPlaylistToDb(filteredPl).catch((err) =>
+            console.warn("Firestore cinema playlist batch delete error:", err)
+          );
+        }
+        return filteredPl;
+      });
+
+      // Track in window.__autocinema_deleted_movie_ids
+      if (typeof window !== "undefined") {
+        const win = window as any;
+        if (!win.__autocinema_deleted_movie_ids) win.__autocinema_deleted_movie_ids = [];
+        movieIds.forEach((id: string) => {
+          if (!win.__autocinema_deleted_movie_ids.includes(id)) {
+            win.__autocinema_deleted_movie_ids.push(id);
+          }
+        });
+        try {
+          localStorage.setItem(
+            "autocinema_deleted_movie_ids",
+            JSON.stringify(win.__autocinema_deleted_movie_ids)
+          );
+        } catch (_) {}
+      }
+
+      // Delete from Firestore in parallel
+      Promise.allSettled(movieIds.map((id: string) => deleteMovieFromDb(id))).catch((err) =>
+        console.warn("Firestore batch delete movies warning:", err)
+      );
+
+      setHasUnsavedChanges(true);
+    },
+    handleBatchMoveMovies = (movieIds: string[], targetFolderId: string) => {
+      if (!movieIds || movieIds.length === 0 || !targetFolderId) return;
+      const idsSet = new Set(movieIds);
+      const updated = t.map((Ce) =>
+        idsSet.has(Ce.id) ? { ...Ce, parentFolderId: targetFolderId } : Ce
+      );
+      dt(updated);
+      setHasUnsavedChanges(true);
+      const changed = updated.filter((m) => idsSet.has(m.id));
+      Promise.allSettled(changed.map((m) => saveMovieToDb(m))).catch((err) =>
+        console.warn("Firestore batch move movies warning:", err)
+      );
+    },
+    handleBatchChangeCategory = (movieIds: string[], newCategory: string) => {
+      if (!movieIds || movieIds.length === 0) return;
+      const idsSet = new Set(movieIds);
+      const updated = t.map((Ce) =>
+        idsSet.has(Ce.id) ? { ...Ce, category: newCategory } : Ce
+      );
+      dt(updated);
+      setHasUnsavedChanges(true);
+      const changed = updated.filter((m) => idsSet.has(m.id));
+      Promise.allSettled(changed.map((m) => saveMovieToDb(m))).catch((err) =>
+        console.warn("Firestore batch category warning:", err)
+      );
+    },
+    handleBatchToggleBroken = (movieIds: string[], isBroken: boolean) => {
+      if (!movieIds || movieIds.length === 0) return;
+      const idsSet = new Set(movieIds);
+      const updated = t.map((Ce) =>
+        idsSet.has(Ce.id) ? { ...Ce, isBroken } : Ce
+      );
+      dt(updated);
+      setHasUnsavedChanges(true);
+      const changed = updated.filter((m) => idsSet.has(m.id));
+      Promise.allSettled(changed.map((m) => saveMovieToDb(m))).catch((err) =>
+        console.warn("Firestore batch broken warning:", err)
+      );
+    },
+    handleBatchToggleHide = (movieIds: string[], isHidden: boolean) => {
+      if (!movieIds || movieIds.length === 0) return;
+      const idsSet = new Set(movieIds);
+      const updated = t.map((Ce) =>
+        idsSet.has(Ce.id) ? { ...Ce, isHidden } : Ce
+      );
+      dt(updated);
+      setHasUnsavedChanges(true);
+      const changed = updated.filter((m) => idsSet.has(m.id));
+      Promise.allSettled(changed.map((m) => saveMovieToDb(m))).catch((err) =>
+        console.warn("Firestore batch hide warning:", err)
+      );
+    },
+    handleBatchAddToPlaylist = (movieIds: string[], targetPlId?: string) => {
+      if (!movieIds || movieIds.length === 0) return;
+      const idsSet = new Set(movieIds);
+      const moviesToAdd = t.filter((m) => idsSet.has(m.id));
+      if (moviesToAdd.length === 0) return;
+
+      let allPlaylists = [];
+      try {
+        const raw = localStorage.getItem("autocinema_cinema_playlists");
+        if (raw) allPlaylists = JSON.parse(raw);
+      } catch (_) {}
+      if (!Array.isArray(allPlaylists) || allPlaylists.length === 0) {
+        allPlaylists = DEFAULT_CINEMA_PLAYLISTS;
+      }
+
+      const activePlId = targetPlId || localStorage.getItem("autocinema_active_playlist_id") || "playlist-default";
+      let targetPl = allPlaylists.find((p: any) => p.id === activePlId);
+      if (!targetPl) {
+        targetPl = allPlaylists[0];
+      }
+
+      const currentPlItems = Array.isArray(targetPl?.items) ? [...targetPl.items] : [...$];
+
+      moviesToAdd.forEach((mov) => {
+        const movId = mov.id;
+        const movTitle = (mov.title || "").trim().toLowerCase();
+        const movUrl = (mov.url || mov.embedUrl || "").trim();
+        const nMovUrl = movUrl ? normalizeVideoKey(movUrl) : "";
+
+        const exists = currentPlItems.some((it: any) => {
+          if (!it) return false;
+          if (movId && (it.movieId === movId || it.id === movId)) return true;
+          if (nMovUrl && it.originalUrl && normalizeVideoKey(it.originalUrl) === nMovUrl) return true;
+          if (movUrl && ((it.url && it.url === movUrl) || (it.streamUrl && it.streamUrl === movUrl))) return true;
+          if (movTitle && movTitle.length > 2 && ((it.movieTitle && it.movieTitle.trim().toLowerCase() === movTitle) || (it.title && it.title.trim().toLowerCase() === movTitle))) return true;
+          return false;
+        });
+
+        if (!exists) {
+          currentPlItems.push({
+            id: `pl-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`,
+            movieId: mov.id,
+            movieTitle: mov.title,
+            title: mov.title,
+            originalUrl: mov.url || mov.embedUrl || "",
+            posterUrl: mov.posterUrl || "",
+            selectedStream: null,
+            selectedServer: "افتراضي",
+            selectedQuality: "HD",
+            allStreams: [],
+            folderId: mov.parentFolderId || "",
+            addedAt: new Date().toISOString(),
+          });
+        }
+      });
+
+      const updatedPlaylists = allPlaylists.map((pl: any) =>
+        pl.id === targetPl?.id ? { ...pl, items: currentPlItems } : pl
+      );
+      try {
+        localStorage.setItem("autocinema_cinema_playlists", JSON.stringify(updatedPlaylists));
+      } catch (_) {}
+
+      const currentActiveId = localStorage.getItem("autocinema_active_playlist_id") || "playlist-default";
+      if (targetPl?.id === currentActiveId || !targetPlId) {
+        U(currentPlItems);
+        ha(currentPlItems);
+        saveCinemaPlaylistToDb(currentPlItems).catch((err) =>
+          console.warn("Firestore playlist error:", err)
         );
-      dt(Ne);
+      }
+
+      saveAllCinemaPlaylistsToDb(updatedPlaylists, currentActiveId).catch((err) =>
+        console.warn("Firestore all playlists error:", err)
+      );
+      setHasUnsavedChanges(true);
     },
-    zt = (V) => {
-      if (!V || V.length === 0) return;
-      const me = new Set(V),
-        pe = t.filter((Ne) => !me.has(Ne.id));
-      dt(pe);
-    },
-    jt = (V) => {
-      const me = new Set(V),
-        pe = t.filter((Ne) => !me.has(Ne.id));
-      dt(pe);
-    },
+    Tt = handleBatchMoveMovies,
+    zt = handleBatchDeleteMovies,
+    jt = handleBatchDeleteMovies,
     ys = (V) => {
       const me = new Map(V.map((Ne) => [Ne.id, Ne.newTitle])),
         pe = t.map((Ne) => {
@@ -21249,11 +24087,11 @@ function VI() {
       dt(vt);
     },
     Sa = (V) => {
-      const me = V.url || V.embedUrl;
-      if (!me) return;
+      const cleanUrl = getCleanMovieExternalUrl(V);
+      if (!cleanUrl) return;
       const targetUrl = isProxyEnabled
-        ? (me.startsWith("/api/") ? me : `/api/proxy?url=${encodeURIComponent(me)}`)
-        : me;
+        ? `/api/proxy?url=${encodeURIComponent(cleanUrl)}`
+        : cleanUrl;
       window.open(targetUrl, "_blank", "noopener,noreferrer");
     },
     Nl = () => {
@@ -21687,6 +24525,12 @@ function VI() {
             onOpenDatabaseModal: () => setIsDatabaseModalOpen(!0),
             onSyncFavoritesToDb: handleSyncFavoritesToDb,
             onSyncFavoritesFromDb: handleSyncFavoritesFromDb,
+            onBatchDeleteMovies: handleBatchDeleteMovies,
+            onBatchMoveMovies: handleBatchMoveMovies,
+            onBatchChangeCategory: handleBatchChangeCategory,
+            onBatchAddToPlaylist: handleBatchAddToPlaylist,
+            onBatchToggleBroken: handleBatchToggleBroken,
+            onBatchToggleHide: handleBatchToggleHide,
           }),
         }),
         c.jsx(k2, {

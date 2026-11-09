@@ -11,6 +11,7 @@
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <meta name="referrer" content="strict-origin-when-cross-origin">
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800;900&display=swap" rel="stylesheet">
     <script>
       // Safe alert and modal guard for sandboxed iframe compatibility
@@ -22,6 +23,14 @@
             try {
               if (_origAlert) _origAlert.call(window, msg);
             } catch (_) {}
+          };
+          const _origConfirm = window.confirm;
+          window.confirm = function(msg) {
+            console.info('[AutoCinema Confirm]:', msg);
+            try {
+              if (_origConfirm) return _origConfirm.call(window, msg);
+            } catch (_) {}
+            return true;
           };
         } catch (_) {}
       }
